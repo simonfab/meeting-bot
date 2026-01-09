@@ -429,6 +429,50 @@ export class GoogleMeetBot extends MeetBotBase {
       this._logger.info('"Got it" modals might be missing...', { error });
     }
 
+    // Dismiss "Microphone not found" and "Camera not found" notifications if present
+    try {
+      this._logger.info('Checking for device notifications (microphone/camera)...');
+      const hasDeviceNotification = await this.page.evaluate(() => {
+        return document.body.innerText.includes('Microphone not found') ||
+               document.body.innerText.includes('Make sure your microphone is plugged in') ||
+               document.body.innerText.includes('Camera not found') ||
+               document.body.innerText.includes('Make sure your camera is plugged in');
+      });
+
+      if (hasDeviceNotification) {
+        this._logger.info('Found device notification (microphone/camera), attempting to dismiss...');
+        // Try to find and click all close buttons
+        const closeButtonsCount = await this.page.evaluate(() => {
+          const allButtons = Array.from(document.querySelectorAll('button'));
+          const closeButtons = allButtons.filter((btn) => {
+            const ariaLabel = btn.getAttribute('aria-label');
+            const hasCloseIcon = btn.querySelector('svg') !== null;
+            return (ariaLabel?.toLowerCase().includes('close') ||
+                    ariaLabel?.toLowerCase().includes('dismiss') ||
+                    (hasCloseIcon && btn?.offsetParent !== null && btn.innerText === ''));
+          });
+
+          let clickedCount = 0;
+          closeButtons.forEach((btn) => {
+            if (btn?.offsetParent !== null) {
+              btn.click();
+              clickedCount++;
+            }
+          });
+          return clickedCount;
+        });
+
+        if (closeButtonsCount > 0) {
+          this._logger.info(`Successfully dismissed ${closeButtonsCount} device notification(s)`);
+          await this.page.waitForTimeout(1000);
+        } else {
+          this._logger.warn('Could not find close button for device notifications');
+        }
+      }
+    } catch (error) {
+      this._logger.info('Error checking/dismissing device notifications...', { error });
+    }
+
     // Recording the meeting page
     this._logger.info('Begin recording...');
     await this.recordMeetingPage({ teamId, eventId, userId, botId, uploader });
@@ -590,38 +634,53 @@ export class GoogleMeetBot extends MeetBotBase {
           let detectionFailures = 0;
           let loneTestDetectionActive = true;
           const maxDetectionFailures = 10; // Track up to 10 consecutive failures
+          let lastBadgeLogTime = 0; // Track last time we logged badge count
 
           function detectLoneParticipantResilient(): void {
             const re = /^[0-9]+$/;
-          
+
             function getContributorsCount(): number | undefined {
               function findPeopleButton() {
                 try {
                   // 1. Try to locate using attribute "starts with"
                   let btn: Element | null | undefined = document.querySelector('button[aria-label^="People -"]');
                   if (btn) return btn;
-                
+
                   // 2. Try to locate using attribute "contains"
                   btn = document.querySelector('button[aria-label*="People"]');
                   if (btn) return btn;
-                
-                  // 3. Try via regex on aria-label (for more complex patterns)
-                  const allBtns = Array.from(document.querySelectorAll('button[aria-label]'));
+
+                  // 3. Try via aria-labelledby pointing to element with "People" text
+                  const allBtns = Array.from(document.querySelectorAll('button[aria-labelledby]'));
                   btn = allBtns.find(b => {
+                    const labelledBy = b.getAttribute('aria-labelledby');
+                    if (labelledBy) {
+                      const labelElement = document.getElementById(labelledBy);
+                      if (labelElement && labelElement.textContent?.trim() === 'People') {
+                        return true;
+                      }
+                    }
+                    return false;
+                  });
+                  if (btn) return btn;
+
+                  // 4. Try via regex on aria-label (for more complex patterns)
+                  const allBtnsWithLabel = Array.from(document.querySelectorAll('button[aria-label]'));
+                  btn = allBtnsWithLabel.find(b => {
                     const label = b.getAttribute('aria-label');
                     return label && /^People - \d+ joined$/.test(label);
                   });
                   if (btn) return btn;
-                
-                  // 4. Fallback: Look for button with a child icon containing "people"
-                  btn = allBtns.find(b =>
+
+                  // 5. Fallback: Look for button with a child icon containing "people"
+                  btn = allBtnsWithLabel.find(b =>
                     Array.from(b.querySelectorAll('i')).some(i =>
                       i.textContent && i.textContent.trim() === 'people'
                     )
                   );
                   if (btn) return btn;
-                
-                  // 5. Not found
+
+                  // 6. Not found
                   return null;
                 } catch (error) {
                   console.log('Error finding people button:', error);
@@ -629,21 +688,73 @@ export class GoogleMeetBot extends MeetBotBase {
                 }
               }
 
-              // 1. Try main DOM with aria-label first
+              // Find participant count badge near People button (doesn't require opening panel)
               try {
                 const peopleBtn = findPeopleButton();
+                // console.log('[Detection] People button found:', !!peopleBtn);
+
                 if (peopleBtn) {
-                  const divs = Array.from((peopleBtn.parentNode as HTMLElement)?.parentNode?.querySelectorAll('div') ?? []);
-                  for (const node of divs) {
-                    if (typeof (node as HTMLElement).innerText === 'string' && re.test((node as HTMLElement).innerText.trim())) {
-                      return Number((node as HTMLElement).innerText.trim());
+                  // Search INSIDE the button (descendants) and nearby (parent container)
+                  const searchRoots = [
+                    peopleBtn, // Search inside button itself
+                    peopleBtn.parentElement,
+                    peopleBtn.parentElement?.parentElement
+                  ].filter(Boolean);
+
+                  // console.log('[Detection] Searching', searchRoots.length, 'containers');
+
+                  for (const searchRoot of searchRoots) {
+                    if (!searchRoot) continue;
+
+                    // Method 1: Look for data-avatar-count attribute (most reliable)
+                    const avatarSpan = searchRoot.querySelector('[data-avatar-count]');
+                    if (avatarSpan) {
+                      const countAttr = avatarSpan.getAttribute('data-avatar-count');
+                      // console.log('[Detection] Method 1 SUCCESS - data-avatar-count:', countAttr);
+                      const count = Number(countAttr);
+                      if (!isNaN(count) && count > 0) {
+                        return count;
+                      }
+                    }
+
+                    // Method 2: Fallback - Look for number in badge div
+                    const badgeDiv = searchRoot.querySelector('div.egzc7c') as HTMLElement;
+                    if (badgeDiv) {
+                      const text = ((badgeDiv.innerText || badgeDiv.textContent) ?? '').trim();
+                      if (text.length > 0 && text.length <= 3 && re.test(text)) {
+                        const count = Number(text);
+                        if (!isNaN(count) && count > 0) {
+                          // console.log('[Detection] Method 2 SUCCESS - Badge text:', text);
+                          return count;
+                        }
+                      }
                     }
                   }
+
+                  // Method 3: Last resort - search for short numbers in People button area
+                  const mainSearchRoot = peopleBtn.parentElement?.parentElement || peopleBtn;
+                  const allDivs = Array.from(mainSearchRoot.querySelectorAll('div'));
+                  for (const div of allDivs) {
+                    const text = ((div as HTMLElement).innerText || div.textContent || '').trim();
+                    if (text.length > 0 && text.length <= 3 && re.test(text)) {
+                      const isVisible = (div as HTMLElement).offsetParent !== null;
+                      if (isVisible) {
+                        const count = Number(text);
+                        if (!isNaN(count) && count > 0) {
+                          // console.log('[Detection] Method 3 SUCCESS - Found number:', count);
+                          return count;
+                        }
+                      }
+                    }
+                  }
+                  // console.log('[Detection] All methods failed to find count');
+                } else {
+                  // console.log('[Detection] People button NOT found');
                 }
-              } catch {
-                console.log('1 Error getting contributors count:', { root: document.body.innerText });
+              } catch (error) {
+                console.log('Error finding participant badge:', error);
               }
-          
+
               return undefined;
             }
           
@@ -658,6 +769,16 @@ export class GoogleMeetBot extends MeetBotBase {
                 let contributors: number | undefined;
                 try {
                   contributors = getContributorsCount();
+
+                  // Log participant count once per minute
+                  if (typeof contributors !== 'undefined') {
+                    const now = Date.now();
+                    if (now - lastBadgeLogTime > 60000) {
+                      console.log('Participant detection check - Count:', contributors);
+                      lastBadgeLogTime = now;
+                    }
+                  }
+
                   if (typeof contributors === 'undefined') {
                     detectionFailures++;
                     console.warn('Meet participant detection failed, retrying. Failure count:', detectionFailures);
@@ -716,6 +837,7 @@ export class GoogleMeetBot extends MeetBotBase {
               let silenceDuration = 0;
               let totalChecks = 0;
               let audioActivitySum = 0;
+              let lastActivityLogTime = 0;
 
               // Audio gain/volume
               const silenceThreshold = 10;
@@ -729,6 +851,14 @@ export class GoogleMeetBot extends MeetBotBase {
                   const audioActivity = dataArray.reduce((a, b) => a + b) / dataArray.length;
                   audioActivitySum += audioActivity;
                   totalChecks++;
+
+                  // Log silence detection status once per minute
+                  const now = Date.now();
+                  if (now - lastActivityLogTime > 60000) {
+                    const avgActivity = (audioActivitySum / totalChecks).toFixed(2);
+                    console.log('Silence detection check - Avg:', avgActivity, 'Current:', audioActivity.toFixed(2), 'Threshold:', silenceThreshold);
+                    lastActivityLogTime = now;
+                  }
 
                   if (audioActivity < silenceThreshold) {
                     silenceDuration += 100; // Check every 100ms
@@ -783,6 +913,33 @@ export class GoogleMeetBot extends MeetBotBase {
                 if (dismissButtons.length > 0) {
                   console.log('Found "Got it" button, clicking it...', dismissButtons[0]);
                   dismissButtons[0].click();
+                }
+
+                // Dismiss "Microphone not found" and "Camera not found" notifications
+                const bodyText = document.body.innerText;
+                if (bodyText.includes('Microphone not found') ||
+                    bodyText.includes('Make sure your microphone is plugged in') ||
+                    bodyText.includes('Camera not found') ||
+                    bodyText.includes('Make sure your camera is plugged in')) {
+                  console.log('Found device notification (microphone/camera), attempting to dismiss...');
+                  // Look for close button (X) near the notification
+                  const allButtons = Array.from(document.querySelectorAll('button'));
+                  const closeButtons = allButtons.filter((btn) => {
+                    const ariaLabel = btn.getAttribute('aria-label');
+                    const hasCloseIcon = btn.querySelector('svg') !== null;
+                    // Look for close/dismiss buttons
+                    return (ariaLabel?.toLowerCase().includes('close') ||
+                            ariaLabel?.toLowerCase().includes('dismiss') ||
+                            (hasCloseIcon && btn?.offsetParent !== null && btn.innerText === ''));
+                  });
+
+                  // Click all visible close buttons to dismiss all notifications
+                  closeButtons.forEach((btn) => {
+                    if (btn?.offsetParent !== null) {
+                      console.log('Clicking close button for device notification...');
+                      btn.click();
+                    }
+                  });
                 }
               } catch(error) {
                 lastDimissError = error;
