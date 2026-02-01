@@ -12,6 +12,8 @@ export interface MeetingJoinParams {
   timezone: string;
   botId?: string;
   eventId?: string;
+  /** Custom metadata passed through to webhook notifications (e.g., tenantId) */
+  metadata?: Record<string, any>;
 }
 
 export interface MeetingJoinRedisParams extends MeetingJoinParams {

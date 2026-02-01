@@ -20,7 +20,8 @@ const joinZoom = async (req: Request, res: Response) => {
     timezone,
     userId,
     eventId,
-    botId
+    botId,
+    metadata
   }: MeetingJoinParams = req.body;
 
   // Validate required fields
@@ -61,6 +62,7 @@ const joinZoom = async (req: Request, res: Response) => {
         tempFileId,
         logger,
         url,
+        metadata,
       );
 
       // Create and join the meeting

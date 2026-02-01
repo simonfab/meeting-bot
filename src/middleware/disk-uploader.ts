@@ -59,6 +59,7 @@ class DiskUploader implements IUploader {
   private _tempFileId: string;
   private _logger: Logger;
   private _meetingLink?: string;
+  private _customMetadata?: Record<string, any>;
 
   private readonly UPLOAD_CHUNK_SIZE = 50 * 1024 * 1024; // 50 MiB
 
@@ -91,7 +92,8 @@ class DiskUploader implements IUploader {
     namePrefix: string,
     tempFileId: string,
     logger: Logger,
-    meetingLink?: string
+    meetingLink?: string,
+    customMetadata?: Record<string, any>
   ) {
     this._token = token;
     this._teamId = teamId;
@@ -102,6 +104,7 @@ class DiskUploader implements IUploader {
     this._tempFileId = tempFileId;
     this._logger = logger;
     this._meetingLink = meetingLink;
+    this._customMetadata = customMetadata;
 
     this.queue = [];
     this.writing = false;
@@ -118,7 +121,8 @@ class DiskUploader implements IUploader {
     namePrefix: string,
     tempFileId: string,
     logger: Logger,
-    meetingLink?: string
+    meetingLink?: string,
+    customMetadata?: Record<string, any>
   ) {
     const folderPath = DiskUploader.getFolderPath(userId);
 
@@ -133,7 +137,8 @@ class DiskUploader implements IUploader {
       namePrefix,
       tempFileId,
       logger,
-      meetingLink
+      meetingLink,
+      customMetadata
     );
     return instance;
   }
@@ -658,6 +663,8 @@ class DiskUploader implements IUploader {
               botId: this._botId,
               contentType: this.contentType,
               uploaderType: config.uploaderType,
+              // Merge custom metadata (e.g., tenantId from MAF)
+              ...(this._customMetadata || {}),
             },
           };
           await notifyRecordingCompleted(payload, this._logger);
