@@ -88,7 +88,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       this._logger.info('Pre-warming: Navigating to Teams meeting...');
       await warmupPage.goto(url, { waitUntil: 'networkidle' });
 
-      await warmupPage.waitForTimeout(2000);
+      await warmupPage.waitForTimeout(1000);
 
       // Try to click "Join from browser" button
       this._logger.info('Pre-warming: Looking for Join from browser button...');
@@ -114,16 +114,16 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
       // Wait for pre-join screen to load
       this._logger.info('Pre-warming: Waiting for pre-join screen...');
-      await warmupPage.waitForTimeout(5000);
+      await warmupPage.waitForTimeout(2000);
 
       // Close the warmup browser
       this._logger.info('Pre-warming: Closing warmup browser...');
       await warmupPage.context().browser()?.close();
       this._logger.info('Pre-warming complete - dialogs triggered');
 
-      // Wait 10 seconds for Chrome to fully close and save state before opening again
-      this._logger.info('Waiting 10 seconds before opening browser for actual meeting...');
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      // Wait for Chrome to fully close and save state before opening again
+      this._logger.info('Waiting 3 seconds before opening browser for actual meeting...');
+      await new Promise(resolve => setTimeout(resolve, 3000));
     } catch (error) {
       this._logger.warn('Pre-warming failed (non-fatal):', error);
     }
@@ -133,7 +133,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
     this.page = await createBrowserContext(url, this._correlationId, 'microsoft');
 
-    await this.page.waitForTimeout(1000);
+    await this.page.waitForTimeout(500);
 
     this._logger.info('Navigating to Microsoft Teams Meeting URL...');
     await this.page.goto(url, { waitUntil: 'networkidle' });
@@ -182,7 +182,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
       this._logger.info('Found name input field, filling with bot name...');
       await nameInput.fill(name ? name : 'ScreenApp Notetaker');
-      await this.page.waitForTimeout(1000);
+      await this.page.waitForTimeout(500);
     } catch (err) {
       this._logger.info('Name input field not found after 120s, skipping...', err?.message);
     }
@@ -191,7 +191,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     const toggleDevices = async () => {
       try {
         this._logger.info('Attempting to turn off camera and mute microphone...');
-        await this.page.waitForTimeout(2000);
+        await this.page.waitForTimeout(1000);
 
         // Turn off camera
         try {

@@ -73,8 +73,8 @@ export class GoogleMeetBot extends MeetBotBase {
     this._logger.info('Navigating to Google Meet URL...');
     await this.page.goto(url, { waitUntil: 'networkidle' });
 
-    this._logger.info('Waiting for 10 seconds...');
-    await this.page.waitForTimeout(10000);
+    this._logger.info('Waiting for 2 seconds...');
+    await this.page.waitForTimeout(2000);
 
     const dismissDeviceCheck = async () => {
       try {
@@ -82,12 +82,12 @@ export class GoogleMeetBot extends MeetBotBase {
         await retryActionWithWait(
           'Clicking the "Continue without microphone and camera" button',
           async () => {
-            await this.page.getByRole('button', { name: 'Continue without microphone and camera' }).waitFor({ timeout: 30000 });
+            await this.page.getByRole('button', { name: 'Continue without microphone and camera' }).waitFor({ timeout: 5000 });
             await this.page.getByRole('button', { name: 'Continue without microphone and camera' }).click();
           },
           this._logger,
           1,
-          15000,
+          2000,
         );
       } catch (dismissError) {
         this._logger.info('Continue without microphone and camera button is probably missing!...');
@@ -145,15 +145,15 @@ export class GoogleMeetBot extends MeetBotBase {
         await uploadDebugImage(await this.page.screenshot({ type: 'png', fullPage: true }), 'text-input-field-wait', userId, this._logger, botId);
       }
     );
-    
-    this._logger.info('Waiting for 10 seconds...');
-    await this.page.waitForTimeout(10000);
+
+    this._logger.info('Waiting for 1 second...');
+    await this.page.waitForTimeout(1000);
 
     this._logger.info('Filling the input field with the name...');
     await this.page.fill('input[type="text"][aria-label="Your name"]', name ? name : 'ScreenApp Notetaker');
 
-    this._logger.info('Waiting for 10 seconds...');
-    await this.page.waitForTimeout(10000);
+    this._logger.info('Waiting for 1 second...');
+    await this.page.waitForTimeout(1000);
     
     await retryActionWithWait(
       'Clicking the "Ask to join" button',
@@ -377,7 +377,7 @@ export class GoogleMeetBot extends MeetBotBase {
 
     try {
       this._logger.info('Waiting for the "Got it" button...');
-      await this.page.waitForSelector('button:has-text("Got it")', { timeout: 15000 });
+      await this.page.waitForSelector('button:has-text("Got it")', { timeout: 3000 });
 
       this._logger.info('Going to click all visible "Got it" buttons...');
 
@@ -576,11 +576,16 @@ export class GoogleMeetBot extends MeetBotBase {
 
           const mediaRecorder = new MediaRecorder(stream, { ...options });
 
+          let chunkCount = 0;
+          let totalBytesReceived = 0;
           mediaRecorder.ondataavailable = async (event: BlobEvent) => {
             if (!event.data.size) {
               console.warn('Received empty chunk...');
               return;
             }
+            chunkCount++;
+            totalBytesReceived += event.data.size;
+            console.log(`Chunk #${chunkCount}: ${event.data.size} bytes (total: ${totalBytesReceived} bytes)`);
             try {
               const arrayBuffer = await event.data.arrayBuffer();
               sendChunkToServer(arrayBuffer);
@@ -597,6 +602,11 @@ export class GoogleMeetBot extends MeetBotBase {
           let lastDimissError: Error | null = null;
 
           const stopTheRecording = async () => {
+            console.log(`=== RECORDING STOPPED ===`);
+            console.log(`Total chunks received: ${chunkCount}`);
+            console.log(`Total bytes received: ${totalBytesReceived}`);
+            console.log(`Audio tracks: ${stream.getAudioTracks().length}`);
+            console.log(`Video tracks: ${stream.getVideoTracks().length}`);
             mediaRecorder.stop();
             stream.getTracks().forEach((track) => track.stop());
 
@@ -954,50 +964,93 @@ export class GoogleMeetBot extends MeetBotBase {
 
           const detectMeetingIsOnAValidPage = () => {
             // Simple check to verify we're still on a supported Google Meet page
+            let pageValidityFailures = 0;
+            const maxPageValidityFailures = 6; // Allow 6 consecutive failures before stopping (60 seconds grace period)
+
             const isOnValidGoogleMeetPage = () => {
               try {
                 // Check if we're still on a Google Meet URL
                 const currentUrl = window.location.href;
                 if (!currentUrl.includes('meet.google.com')) {
                   console.warn('No longer on Google Meet page - URL changed to:', currentUrl);
-                  return false;
+                  return 'FATAL'; // Immediate stop
                 }
 
                 const currentBodyText = document.body.innerText;
                 if (currentBodyText.includes('You\'ve been removed from the meeting')) {
                   console.warn('Bot was removed from the meeting - ending recording on team:', userId, teamId);
-                  return false;
+                  return 'FATAL'; // Immediate stop
                 }
 
                 if (currentBodyText.includes('No one responded to your request to join the call')) {
                   console.warn('Bot was not admitted to the meeting - ending recording on team:', userId, teamId);
-                  return false;
+                  return 'FATAL'; // Immediate stop
                 }
 
-                // Check for basic Google Meet UI elements
-                const hasMeetElements = document.querySelector('button[aria-label="People"]') !== null ||
-                                      document.querySelector('button[aria-label="Leave call"]') !== null;
+                // Check for basic Google Meet UI elements (multiple fallback selectors)
+                // Google Meet frequently changes aria-labels, so check multiple indicators
+                const meetIndicators = [
+                  // Primary buttons
+                  'button[aria-label="People"]',
+                  'button[aria-label="Leave call"]',
+                  // Alternative labels
+                  'button[aria-label="Show everyone"]',
+                  'button[aria-label="Participants"]',
+                  'button[aria-label="End call"]',
+                  'button[aria-label="Hang up"]',
+                  // Fallback: check for meeting-specific containers/elements
+                  '[data-allocation-index]', // Meet participant container
+                  '[data-self-name]', // Self participant indicator
+                  '[data-tooltip="Leave call"]',
+                  '[data-tooltip="End call"]',
+                ];
+
+                const hasMeetElements = meetIndicators.some(selector => {
+                  try {
+                    return document.querySelector(selector) !== null;
+                  } catch {
+                    return false;
+                  }
+                });
 
                 if (!hasMeetElements) {
-                  console.warn('Google Meet UI elements not found - page may have changed state');
-                  return false;
+                  console.warn('Google Meet UI elements not found - checked selectors:', meetIndicators.length);
+                  return 'TEMPORARY'; // May be temporary - use failure counter
                 }
 
-                return true;
+                return 'OK';
               } catch (error) {
                 console.error('Error checking page validity:', error);
-                return false;
+                return 'TEMPORARY'; // May be temporary
               }
             };
 
             // check if we're still on a valid Google Meet page
-            isOnValidGoogleMeetPageInterval = setInterval(() => {
-              if (!isOnValidGoogleMeetPage()) {
-                console.log('Google Meet page state changed - ending recording on team:', userId, teamId);
-                clearInterval(isOnValidGoogleMeetPageInterval);
-                stopTheRecording();
-              }
-            }, 10000);
+            // Start checking after 30 seconds to give time for UI to stabilize
+            setTimeout(() => {
+              isOnValidGoogleMeetPageInterval = setInterval(() => {
+                const status = isOnValidGoogleMeetPage();
+                if (status === 'FATAL') {
+                  console.log('Google Meet page FATAL error - ending recording on team:', userId, teamId);
+                  clearInterval(isOnValidGoogleMeetPageInterval);
+                  stopTheRecording();
+                } else if (status === 'TEMPORARY') {
+                  pageValidityFailures++;
+                  console.warn('Page validity check failed, count:', pageValidityFailures, 'of', maxPageValidityFailures);
+                  if (pageValidityFailures >= maxPageValidityFailures) {
+                    console.log('Google Meet page state changed (persistent) - ending recording on team:', userId, teamId);
+                    clearInterval(isOnValidGoogleMeetPageInterval);
+                    stopTheRecording();
+                  }
+                } else {
+                  // Reset failure counter on success
+                  if (pageValidityFailures > 0) {
+                    console.log('Page validity recovered after', pageValidityFailures, 'failures');
+                  }
+                  pageValidityFailures = 0;
+                }
+              }, 10000);
+            }, 30000); // Wait 30 seconds before starting checks
           };
 
           detectModalsAndDismiss();
