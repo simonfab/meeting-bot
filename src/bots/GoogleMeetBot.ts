@@ -235,21 +235,15 @@ export class GoogleMeetBot extends MeetBotBase {
             let botWasDeniedAccess = false;
 
             try {
-              peopleElement = await this.page.waitForSelector('button[aria-label="People"]', { timeout: 5000 });
+              peopleElement = await this.page.waitForSelector('button[aria-label="People"]', { timeout: 500 });
             } catch(e) {
-              this._logger.error(
-                'wait error', { error: e }
-              );
-              //do nothing
+              // Element not found yet - this is expected while waiting
             }
 
             try {
-              callButtonElement = await this.page.waitForSelector('button[aria-label="Leave call"]', { timeout: 5000 });
+              callButtonElement = await this.page.waitForSelector('button[aria-label="Leave call"]', { timeout: 500 });
             } catch(e) {
-              this._logger.error(
-                'wait error', { error: e }
-              );
-              //do nothing
+              // Element not found yet - this is expected while waiting
             }
 
             if (peopleElement || callButtonElement) {
@@ -352,7 +346,7 @@ export class GoogleMeetBot extends MeetBotBase {
             );
             // Do nothing
           }
-        }, 20000);
+        }, 2000);  // Check every 2 seconds (was 20s - too slow, missing start of recording)
       });
 
       const waitingAtLobbySuccess = await waitAtLobbyPromise;
@@ -377,7 +371,7 @@ export class GoogleMeetBot extends MeetBotBase {
 
     try {
       this._logger.info('Waiting for the "Got it" button...');
-      await this.page.waitForSelector('button:has-text("Got it")', { timeout: 3000 });
+      await this.page.waitForSelector('button:has-text("Got it")', { timeout: 1000 });
 
       this._logger.info('Going to click all visible "Got it" buttons...');
 
@@ -987,6 +981,23 @@ export class GoogleMeetBot extends MeetBotBase {
                   return 'FATAL'; // Immediate stop
                 }
 
+                // Detect meeting ended scenarios
+                const meetingEndedIndicators = [
+                  'The meeting has ended',
+                  'You left the meeting',
+                  'This meeting has ended',
+                  'Meeting ended',
+                  'Return to home screen',
+                  'The video call ended',
+                  'Call ended',
+                ];
+                for (const indicator of meetingEndedIndicators) {
+                  if (currentBodyText.includes(indicator)) {
+                    console.warn('Meeting ended detected:', indicator, '- ending recording on team:', userId, teamId);
+                    return 'FATAL'; // Immediate stop
+                  }
+                }
+
                 // Check for basic Google Meet UI elements (multiple fallback selectors)
                 // Google Meet frequently changes aria-labels, so check multiple indicators
                 const meetIndicators = [
@@ -1029,25 +1040,35 @@ export class GoogleMeetBot extends MeetBotBase {
             // Start checking after 30 seconds to give time for UI to stabilize
             setTimeout(() => {
               isOnValidGoogleMeetPageInterval = setInterval(() => {
-                const status = isOnValidGoogleMeetPage();
-                if (status === 'FATAL') {
-                  console.log('Google Meet page FATAL error - ending recording on team:', userId, teamId);
-                  clearInterval(isOnValidGoogleMeetPageInterval);
-                  stopTheRecording();
-                } else if (status === 'TEMPORARY') {
+                try {
+                  const status = isOnValidGoogleMeetPage();
+                  if (status === 'FATAL') {
+                    console.log('Google Meet page FATAL error - ending recording on team:', userId, teamId);
+                    clearInterval(isOnValidGoogleMeetPageInterval);
+                    stopTheRecording();
+                  } else if (status === 'TEMPORARY') {
+                    pageValidityFailures++;
+                    console.warn('Page validity check failed, count:', pageValidityFailures, 'of', maxPageValidityFailures);
+                    if (pageValidityFailures >= maxPageValidityFailures) {
+                      console.log('Google Meet page state changed (persistent) - ending recording on team:', userId, teamId);
+                      clearInterval(isOnValidGoogleMeetPageInterval);
+                      stopTheRecording();
+                    }
+                  } else {
+                    // Reset failure counter on success
+                    if (pageValidityFailures > 0) {
+                      console.log('Page validity recovered after', pageValidityFailures, 'failures');
+                    }
+                    pageValidityFailures = 0;
+                  }
+                } catch (intervalError) {
+                  console.error('Error in page validity interval - forcing stop:', intervalError);
                   pageValidityFailures++;
-                  console.warn('Page validity check failed, count:', pageValidityFailures, 'of', maxPageValidityFailures);
                   if (pageValidityFailures >= maxPageValidityFailures) {
-                    console.log('Google Meet page state changed (persistent) - ending recording on team:', userId, teamId);
+                    console.log('Page validity interval crashed repeatedly - ending recording');
                     clearInterval(isOnValidGoogleMeetPageInterval);
                     stopTheRecording();
                   }
-                } else {
-                  // Reset failure counter on success
-                  if (pageValidityFailures > 0) {
-                    console.log('Page validity recovered after', pageValidityFailures, 'failures');
-                  }
-                  pageValidityFailures = 0;
                 }
               }, 10000);
             }, 30000); // Wait 30 seconds before starting checks

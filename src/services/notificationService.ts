@@ -19,7 +19,11 @@ function signPayload(body: string, secret?: string): string | undefined {
 }
 
 async function sendWebhook(payload: RecordingCompletedPayload, logger: Logger) {
-  if (!config.notifyWebhookEnabled) return;
+  logger.info('sendWebhook called', { enabled: config.notifyWebhookEnabled, url: config.notifyWebhookUrl });
+  if (!config.notifyWebhookEnabled) {
+    logger.info('Webhook is disabled, skipping.');
+    return;
+  }
   if (!config.notifyWebhookUrl) {
     logger.warn('Webhook enabled but NOTIFY_WEBHOOK_URL is not set. Skipping.');
     return;
@@ -28,17 +32,22 @@ async function sendWebhook(payload: RecordingCompletedPayload, logger: Logger) {
   const body = JSON.stringify(payload);
   const signature = signPayload(body, config.notifyWebhookSecret);
 
+  logger.info('Sending webhook to:', config.notifyWebhookUrl);
   try {
-    await axios.post(config.notifyWebhookUrl, body, {
+    const response = await axios.post(config.notifyWebhookUrl, body, {
       headers: {
         'Content-Type': 'application/json',
         ...(signature ? { 'X-Webhook-Signature': signature } : {}),
       },
       timeout: 10000,
     });
-    logger.info('Recording completed webhook delivered.');
-  } catch (err) {
-    logger.error('Failed to deliver recording webhook', err as any);
+    logger.info('Recording completed webhook delivered.', { status: response.status });
+  } catch (err: any) {
+    logger.error('Failed to deliver recording webhook', {
+      message: err?.message,
+      code: err?.code,
+      url: config.notifyWebhookUrl
+    });
   }
 }
 
