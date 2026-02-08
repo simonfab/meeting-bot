@@ -44,7 +44,8 @@ export class FFmpegRecorder {
           '-c:v', 'libvpx',
           '-deadline', 'realtime',
           '-cpu-used', '8',
-          '-b:v', '1M',
+          '-b:v', '0',            // Unconstrained - let CRF control quality
+          '-crf', '35',           // Quality-based (4-63, higher = smaller). Screen content compresses well
           '-g', '50', // Keyframe interval
           '-threads', '0',
 

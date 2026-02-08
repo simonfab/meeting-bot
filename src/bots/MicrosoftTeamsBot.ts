@@ -589,7 +589,42 @@ export class MicrosoftTeamsBot extends MeetBotBase {
           }, maxDuration);
           console.log(`Max duration timeout set to ${maxDuration / 60000} minutes (safety limit)`);
 
-          // Activate participant detection after delay
+          // IMMEDIATE: Detect "meeting ended" DOM signals from Teams
+          // When the host ends the meeting, Teams shows overlays/text before participant count updates
+          let meetEndDetected = false;
+          const endMeetingOnce = (reason: string) => {
+            if (meetEndDetected) return;
+            meetEndDetected = true;
+            console.log(`Meeting end detected: ${reason}`);
+            (window as any).screenAppMeetEnd();
+          };
+
+          // Check for Teams "meeting ended" signals every 2 seconds (starts immediately)
+          const meetingEndedCheck = setInterval(() => {
+            try {
+              const bodyText = document.body?.innerText || '';
+              // Teams shows these when host ends meeting or bot gets disconnected
+              if (bodyText.includes('The meeting has ended') ||
+                  bodyText.includes('You left the meeting') ||
+                  bodyText.includes('Meeting has ended') ||
+                  bodyText.includes('Call ended') ||
+                  bodyText.includes('You were removed from the meeting')) {
+                clearInterval(meetingEndedCheck);
+                endMeetingOnce('Teams meeting-ended overlay detected');
+              }
+
+              // Also check for Teams redirect to post-meeting page
+              const url = window.location.href;
+              if (url.includes('/post-meeting') || url.includes('/meetingEnded')) {
+                clearInterval(meetingEndedCheck);
+                endMeetingOnce('Redirected to post-meeting page');
+              }
+            } catch (error) {
+              // Non-fatal, keep checking
+            }
+          }, 2000);
+
+          // Activate participant detection after delay (existing logic, reduced interval)
           setTimeout(() => {
             console.log('Activating participant count detection...');
 
@@ -606,13 +641,12 @@ export class MicrosoftTeamsBot extends MeetBotBase {
                     return; // Still has participants
                   }
 
-                  console.log('Bot is alone, ending meeting');
                   clearInterval(interval);
-                  (window as any).screenAppMeetEnd();
+                  endMeetingOnce('Bot is alone (participant count)');
                 } catch (error) {
                   console.error('Participant detection error:', error);
                 }
-              }, 5000);
+              }, 2000); // Reduced from 5s to 2s
             };
 
             // Start participant detection
