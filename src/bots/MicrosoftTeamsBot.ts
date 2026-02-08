@@ -88,7 +88,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       this._logger.info('Pre-warming: Navigating to Teams meeting...');
       await warmupPage.goto(url, { waitUntil: 'networkidle' });
 
-      await warmupPage.waitForTimeout(1000);
+      await warmupPage.waitForTimeout(500);
 
       // Try to click "Join from browser" button
       this._logger.info('Pre-warming: Looking for Join from browser button...');
@@ -114,7 +114,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
       // Wait for pre-join screen to load
       this._logger.info('Pre-warming: Waiting for pre-join screen...');
-      await warmupPage.waitForTimeout(2000);
+      await warmupPage.waitForTimeout(1000);
 
       // Close the warmup browser
       this._logger.info('Pre-warming: Closing warmup browser...');
@@ -122,8 +122,8 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       this._logger.info('Pre-warming complete - dialogs triggered');
 
       // Wait for Chrome to fully close and save state before opening again
-      this._logger.info('Waiting 3 seconds before opening browser for actual meeting...');
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      this._logger.info('Waiting 1 second before opening browser for actual meeting...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
       this._logger.warn('Pre-warming failed (non-fatal):', error);
     }
@@ -133,7 +133,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
     this.page = await createBrowserContext(url, this._correlationId, 'microsoft');
 
-    await this.page.waitForTimeout(500);
+    await this.page.waitForTimeout(250);
 
     this._logger.info('Navigating to Microsoft Teams Meeting URL...');
     await this.page.goto(url, { waitUntil: 'networkidle' });
@@ -178,11 +178,11 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       const nameInput = this.page.locator('input[data-tid="prejoin-display-name-input"]');
 
       // Wait for the field to be visible
-      await nameInput.waitFor({ state: 'visible', timeout: 120000 });
+      await nameInput.waitFor({ state: 'visible', timeout: 30000 });
 
       this._logger.info('Found name input field, filling with bot name...');
       await nameInput.fill(name ? name : 'ScreenApp Notetaker');
-      await this.page.waitForTimeout(500);
+      await this.page.waitForTimeout(250);
     } catch (err) {
       this._logger.info('Name input field not found after 120s, skipping...', err?.message);
     }
@@ -191,7 +191,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     const toggleDevices = async () => {
       try {
         this._logger.info('Attempting to turn off camera and mute microphone...');
-        await this.page.waitForTimeout(1000);
+        await this.page.waitForTimeout(500);
 
         // Turn off camera
         try {
@@ -210,7 +210,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
               const label = await cameraButton.getAttribute('aria-label');
               this._logger.info(`Clicking camera toggle: ${label}`);
               await cameraButton.click();
-              await this.page.waitForTimeout(500);
+              await this.page.waitForTimeout(250);
               break;
             }
           }
@@ -235,7 +235,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
               const label = await micButton.getAttribute('aria-label');
               this._logger.info(`Clicking microphone toggle: ${label}`);
               await micButton.click();
-              await this.page.waitForTimeout(500);
+              await this.page.waitForTimeout(250);
               break;
             }
           }
@@ -317,7 +317,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       const notificationCheck = async () => {
         try {
           this._logger.info('Waiting for the "Close" button...');
-          await this.page.waitForSelector('button[aria-label=Close]', { timeout: 5000 });
+          await this.page.waitForSelector('button[aria-label=Close]', { timeout: 3000 });
           this._logger.info('Clicking the "Close" button...');
           await this.page.click('button[aria-label=Close]', { timeout: 2000 });
         } catch (error) {
@@ -329,7 +329,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       const deviceCheck = async () => {
         try {
           this._logger.info('Waiting for the "Close" button...');
-          await this.page.waitForSelector('button[title="Close"]', { timeout: 5000 });
+          await this.page.waitForSelector('button[title="Close"]', { timeout: 3000 });
     
           this._logger.info('Going to click all visible "Close" buttons...');
     
@@ -366,13 +366,13 @@ export class MicrosoftTeamsBot extends MeetBotBase {
                 closeButtonsClicked++;
                 this._logger.info(`Clicked a "Close" button #${closeButtonsClicked}`);
                 
-                await this.page.waitForTimeout(2000);
+                await this.page.waitForTimeout(500);
               } catch (err) {
                 this._logger.warn('Click failed, possibly already dismissed', { error: err });
               }
             }
-          
-            await this.page.waitForTimeout(2000);
+
+            await this.page.waitForTimeout(500);
           }
         } catch (error) {
           // Log and ignore this error
@@ -387,8 +387,8 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     await dismissDeviceChecksAndNotifications();
 
     // Wait for mic to be fully muted and any initial beeps to stop
-    this._logger.info('Waiting 5 seconds for audio to stabilize before recording...');
-    await this.page.waitForTimeout(5000);
+    this._logger.info('Waiting 2 seconds for audio to stabilize before recording...');
+    await this.page.waitForTimeout(2000);
 
     // Recording the meeting page with ffmpeg
     this._logger.info('Begin recording with ffmpeg...');
