@@ -407,7 +407,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
     // Use the same temp folder as Google Meet bot (has proper permissions)
     const tempFolder = path.join(process.cwd(), 'dist', '_tempvideo');
-    const outputPath = path.join(tempFolder, `recording-${botId || Date.now()}.mp4`);
+    const outputPath = path.join(tempFolder, `recording-${botId || Date.now()}.webm`);
 
     this._logger.info('Starting ffmpeg recording...', { outputPath, duration });
 

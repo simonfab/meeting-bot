@@ -40,29 +40,22 @@ export class FFmpegRecorder {
           '-ar', '44100',
           '-i', 'virtual_output.monitor',
 
-          // Video encoding with better compatibility
-          '-c:v', 'libx264',
-          '-preset', 'faster',
-          '-pix_fmt', 'yuv420p',
-          '-crf', '23',
+          // Video encoding - VP8 for WebM (no finalization delay unlike MP4)
+          '-c:v', 'libvpx',
+          '-deadline', 'realtime',
+          '-cpu-used', '8',
+          '-b:v', '1M',
           '-g', '50', // Keyframe interval
           '-threads', '0',
 
-          // Audio encoding
-          '-c:a', 'aac',
+          // Audio encoding - Opus for WebM
+          '-c:a', 'libopus',
           '-b:a', '128k',
-          '-ar', '44100',
+          '-ar', '48000',
           '-ac', '2',
-          '-strict', 'experimental',
 
-          // Sync and timing
-          '-vsync', 'cfr',
-          '-async', '1',
-
-          // MP4 optimization
-          '-movflags', '+faststart',
-
-          // Output
+          // Output format
+          '-f', 'webm',
           this.outputPath
         ];
 
@@ -208,21 +201,21 @@ export class FFmpegRecorder {
         this.ffmpegProcess.kill('SIGTERM');
       }
 
-      // Wait longer for ffmpeg to finalize the file (15 seconds)
+      // WebM format needs no finalization (unlike MP4), so ffmpeg exits quickly
       const timeout = setTimeout(() => {
         if (this.ffmpegProcess && !this.ffmpegProcess.killed && !resolved) {
-          this.logger.warn('ffmpeg did not exit after 15s, sending SIGTERM');
+          this.logger.warn('ffmpeg did not exit after 5s, sending SIGTERM');
           this.ffmpegProcess.kill('SIGTERM');
 
-          // Last resort SIGKILL after 5 more seconds
+          // Last resort SIGKILL after 3 more seconds
           setTimeout(() => {
             if (this.ffmpegProcess && !this.ffmpegProcess.killed && !resolved) {
               this.logger.error('ffmpeg still not exited, sending SIGKILL');
               this.ffmpegProcess.kill('SIGKILL');
             }
-          }, 5000);
+          }, 3000);
         }
-      }, 15000);
+      }, 5000);
 
       this.ffmpegProcess.on('exit', (code, signal) => {
         if (!resolved) {
