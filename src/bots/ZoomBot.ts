@@ -77,7 +77,7 @@ export class ZoomBot extends BotBase {
       this._logger.info(`Detected .exe download: ${route.request().url()?.split('download')[0]}`);
     });
 
-    await this.page.waitForTimeout(500);
+    await this.page.waitForTimeout(250);
 
     this._logger.info('Navigating to Zoom Meeting URL...');
     await this.page.goto(url, { waitUntil: 'networkidle' });
@@ -85,9 +85,9 @@ export class ZoomBot extends BotBase {
     // Accept cookies
     try {
       this._logger.info('Waiting for the "Accept Cookies" button...');
-      await this.page.waitForTimeout(1000);
+      await this.page.waitForTimeout(500);
       const acceptCookies = await this.page.locator('button', { hasText: 'Accept Cookies' });
-      await acceptCookies.waitFor({ timeout: 5000 });
+      await acceptCookies.waitFor({ timeout: 3000 });
 
       this._logger.info('Clicking the "Accept Cookies" button...', await acceptCookies.count());
       await acceptCookies.click({ force: true });
@@ -108,8 +108,8 @@ export class ZoomBot extends BotBase {
           return false;
         }
 
-        this._logger.info('Waiting for 2 seconds...');
-        await this.page.waitForTimeout(2000);
+        this._logger.info('Waiting for 1 second...');
+        await this.page.waitForTimeout(1000);
 
         const launchMeetingGetByRole = this.page.getByRole('button', { name: /Launch Meeting/i }).first();
         this._logger.info('Does Launch Meeting exist', await launchMeetingGetByRole.isVisible());
@@ -227,8 +227,8 @@ export class ZoomBot extends BotBase {
 
     this._logger.info('Heading to the web client...', { usingDirectWebClient });
 
-    this._logger.info('Waiting for 3 seconds...');
-    await this.page.waitForTimeout(3000);
+    this._logger.info('Waiting for 1 second...');
+    await this.page.waitForTimeout(1000);
 
     let iframe: Frame | Page = this.page;
     const apps: ('app' | 'iframe')[] = [];
@@ -279,12 +279,12 @@ export class ZoomBot extends BotBase {
     this._logger.info('Waiting for the input field to be visible...');
     await iframe.waitForSelector('input[type="text"]', { timeout: 60000 });
 
-    this._logger.info('Waiting for 2 seconds...');
-    await this.page.waitForTimeout(2000);
+    this._logger.info('Waiting for 500ms...');
+    await this.page.waitForTimeout(500);
     this._logger.info('Filling the input field with the name...');
     await iframe.fill('input[type="text"]', name ? name : 'ScreenApp Notetaker');
 
-    await this.page.waitForTimeout(1000);
+    await this.page.waitForTimeout(500);
 
     this._logger.info('Clicking the "Join" button...');
     const joinButton = await iframe.locator('button', { hasText: 'Join' });

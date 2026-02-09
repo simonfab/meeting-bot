@@ -88,7 +88,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       this._logger.info('Pre-warming: Navigating to Teams meeting...');
       await warmupPage.goto(url, { waitUntil: 'networkidle' });
 
-      await warmupPage.waitForTimeout(1000);
+      await warmupPage.waitForTimeout(500);
 
       // Try to click "Join from browser" button
       this._logger.info('Pre-warming: Looking for Join from browser button...');
@@ -114,7 +114,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
       // Wait for pre-join screen to load
       this._logger.info('Pre-warming: Waiting for pre-join screen...');
-      await warmupPage.waitForTimeout(2000);
+      await warmupPage.waitForTimeout(1000);
 
       // Close the warmup browser
       this._logger.info('Pre-warming: Closing warmup browser...');
@@ -122,8 +122,8 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       this._logger.info('Pre-warming complete - dialogs triggered');
 
       // Wait for Chrome to fully close and save state before opening again
-      this._logger.info('Waiting 3 seconds before opening browser for actual meeting...');
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      this._logger.info('Waiting 1 second before opening browser for actual meeting...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
       this._logger.warn('Pre-warming failed (non-fatal):', error);
     }
@@ -133,7 +133,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
     this.page = await createBrowserContext(url, this._correlationId, 'microsoft');
 
-    await this.page.waitForTimeout(500);
+    await this.page.waitForTimeout(250);
 
     this._logger.info('Navigating to Microsoft Teams Meeting URL...');
     await this.page.goto(url, { waitUntil: 'networkidle' });
@@ -178,11 +178,11 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       const nameInput = this.page.locator('input[data-tid="prejoin-display-name-input"]');
 
       // Wait for the field to be visible
-      await nameInput.waitFor({ state: 'visible', timeout: 120000 });
+      await nameInput.waitFor({ state: 'visible', timeout: 30000 });
 
       this._logger.info('Found name input field, filling with bot name...');
       await nameInput.fill(name ? name : 'ScreenApp Notetaker');
-      await this.page.waitForTimeout(500);
+      await this.page.waitForTimeout(250);
     } catch (err) {
       this._logger.info('Name input field not found after 120s, skipping...', err?.message);
     }
@@ -191,7 +191,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     const toggleDevices = async () => {
       try {
         this._logger.info('Attempting to turn off camera and mute microphone...');
-        await this.page.waitForTimeout(1000);
+        await this.page.waitForTimeout(500);
 
         // Turn off camera
         try {
@@ -210,7 +210,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
               const label = await cameraButton.getAttribute('aria-label');
               this._logger.info(`Clicking camera toggle: ${label}`);
               await cameraButton.click();
-              await this.page.waitForTimeout(500);
+              await this.page.waitForTimeout(250);
               break;
             }
           }
@@ -235,7 +235,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
               const label = await micButton.getAttribute('aria-label');
               this._logger.info(`Clicking microphone toggle: ${label}`);
               await micButton.click();
-              await this.page.waitForTimeout(500);
+              await this.page.waitForTimeout(250);
               break;
             }
           }
@@ -317,7 +317,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       const notificationCheck = async () => {
         try {
           this._logger.info('Waiting for the "Close" button...');
-          await this.page.waitForSelector('button[aria-label=Close]', { timeout: 5000 });
+          await this.page.waitForSelector('button[aria-label=Close]', { timeout: 3000 });
           this._logger.info('Clicking the "Close" button...');
           await this.page.click('button[aria-label=Close]', { timeout: 2000 });
         } catch (error) {
@@ -329,7 +329,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       const deviceCheck = async () => {
         try {
           this._logger.info('Waiting for the "Close" button...');
-          await this.page.waitForSelector('button[title="Close"]', { timeout: 5000 });
+          await this.page.waitForSelector('button[title="Close"]', { timeout: 3000 });
     
           this._logger.info('Going to click all visible "Close" buttons...');
     
@@ -366,13 +366,13 @@ export class MicrosoftTeamsBot extends MeetBotBase {
                 closeButtonsClicked++;
                 this._logger.info(`Clicked a "Close" button #${closeButtonsClicked}`);
                 
-                await this.page.waitForTimeout(2000);
+                await this.page.waitForTimeout(500);
               } catch (err) {
                 this._logger.warn('Click failed, possibly already dismissed', { error: err });
               }
             }
-          
-            await this.page.waitForTimeout(2000);
+
+            await this.page.waitForTimeout(500);
           }
         } catch (error) {
           // Log and ignore this error
@@ -387,8 +387,8 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     await dismissDeviceChecksAndNotifications();
 
     // Wait for mic to be fully muted and any initial beeps to stop
-    this._logger.info('Waiting 5 seconds for audio to stabilize before recording...');
-    await this.page.waitForTimeout(5000);
+    this._logger.info('Waiting 2 seconds for audio to stabilize before recording...');
+    await this.page.waitForTimeout(2000);
 
     // Recording the meeting page with ffmpeg
     this._logger.info('Begin recording with ffmpeg...');
@@ -407,7 +407,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
     // Use the same temp folder as Google Meet bot (has proper permissions)
     const tempFolder = path.join(process.cwd(), 'dist', '_tempvideo');
-    const outputPath = path.join(tempFolder, `recording-${botId || Date.now()}.mp4`);
+    const outputPath = path.join(tempFolder, `recording-${botId || Date.now()}.webm`);
 
     this._logger.info('Starting ffmpeg recording...', { outputPath, duration });
 
@@ -589,7 +589,42 @@ export class MicrosoftTeamsBot extends MeetBotBase {
           }, maxDuration);
           console.log(`Max duration timeout set to ${maxDuration / 60000} minutes (safety limit)`);
 
-          // Activate participant detection after delay
+          // IMMEDIATE: Detect "meeting ended" DOM signals from Teams
+          // When the host ends the meeting, Teams shows overlays/text before participant count updates
+          let meetEndDetected = false;
+          const endMeetingOnce = (reason: string) => {
+            if (meetEndDetected) return;
+            meetEndDetected = true;
+            console.log(`Meeting end detected: ${reason}`);
+            (window as any).screenAppMeetEnd();
+          };
+
+          // Check for Teams "meeting ended" signals every 2 seconds (starts immediately)
+          const meetingEndedCheck = setInterval(() => {
+            try {
+              const bodyText = document.body?.innerText || '';
+              // Teams shows these when host ends meeting or bot gets disconnected
+              if (bodyText.includes('The meeting has ended') ||
+                  bodyText.includes('You left the meeting') ||
+                  bodyText.includes('Meeting has ended') ||
+                  bodyText.includes('Call ended') ||
+                  bodyText.includes('You were removed from the meeting')) {
+                clearInterval(meetingEndedCheck);
+                endMeetingOnce('Teams meeting-ended overlay detected');
+              }
+
+              // Also check for Teams redirect to post-meeting page
+              const url = window.location.href;
+              if (url.includes('/post-meeting') || url.includes('/meetingEnded')) {
+                clearInterval(meetingEndedCheck);
+                endMeetingOnce('Redirected to post-meeting page');
+              }
+            } catch (error) {
+              // Non-fatal, keep checking
+            }
+          }, 2000);
+
+          // Activate participant detection after delay (existing logic, reduced interval)
           setTimeout(() => {
             console.log('Activating participant count detection...');
 
@@ -606,13 +641,12 @@ export class MicrosoftTeamsBot extends MeetBotBase {
                     return; // Still has participants
                   }
 
-                  console.log('Bot is alone, ending meeting');
                   clearInterval(interval);
-                  (window as any).screenAppMeetEnd();
+                  endMeetingOnce('Bot is alone (participant count)');
                 } catch (error) {
                   console.error('Participant detection error:', error);
                 }
-              }, 5000);
+              }, 2000); // Reduced from 5s to 2s
             };
 
             // Start participant detection
