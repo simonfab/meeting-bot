@@ -3,6 +3,18 @@ import { BotStatus, IVFSResponse, LogCategory, LogSubCategory } from '../types';
 import config from '../config';
 import { Logger } from 'winston';
 
+let warnedMissingAuthBase = false;
+const ensureAuthBaseConfigured = (logger: Logger): boolean => {
+  if (!config.authBaseUrlV2) {
+    if (!warnedMissingAuthBase) {
+      logger.info('AUTH_BASE_URL_V2 not set; skipping bot status/log updates.');
+      warnedMissingAuthBase = true;
+    }
+    return false;
+  }
+  return true;
+};
+
 export const patchBotStatus = async ({
   eventId,
   botId,
@@ -17,6 +29,9 @@ export const patchBotStatus = async ({
     status: BotStatus[],
 }, logger: Logger) => {
   try {
+    if (!ensureAuthBaseConfigured(logger)) {
+      return false;
+    }
     const apiV2 = createApiV2(token, config.serviceKey);
     const response = await apiV2.patch<
         IVFSResponse<never>
@@ -60,6 +75,9 @@ export const addBotLog = async ({
     subCategory: LogSubCategory<LogCategory>,
 }, logger: Logger) => {
   try {
+    if (!ensureAuthBaseConfigured(logger)) {
+      return false;
+    }
     const apiV2 = createApiV2(token, config.serviceKey);
     const response = await apiV2.patch<
         IVFSResponse<never>

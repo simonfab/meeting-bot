@@ -51,7 +51,8 @@ export default {
     host: process.env.DB_HOST || 'localhost',
     user: process,
   },
-  authBaseUrlV2: process.env.AUTH_BASE_URL_V2 ?? 'http://localhost:8081/v2',
+  // ScreenApp backend (optional). If not set, status/log updates are skipped.
+  authBaseUrlV2: process.env.AUTH_BASE_URL_V2,
   // Unset MAX_RECORDING_DURATION_MINUTES to use default upper limit on duration
   maxRecordingDuration: process.env.MAX_RECORDING_DURATION_MINUTES ?
     Number(process.env.MAX_RECORDING_DURATION_MINUTES) :

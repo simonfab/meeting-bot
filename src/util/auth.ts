@@ -3,8 +3,11 @@ import config from '../config';
 
 const baseURLV2 = config.authBaseUrlV2;
 
-export const createApiV2 = (token: string, serviceKey?: string) => 
-  axios.create({
+export const createApiV2 = (token: string, serviceKey?: string) => {
+  if (!baseURLV2) {
+    throw new Error('AUTH_BASE_URL_V2 is not configured');
+  }
+  return axios.create({
     baseURL: baseURLV2,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -12,3 +15,4 @@ export const createApiV2 = (token: string, serviceKey?: string) =>
       ...(serviceKey && { 'x-sa-api-key': serviceKey }),
     },
   });
+};
