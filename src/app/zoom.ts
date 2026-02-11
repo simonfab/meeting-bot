@@ -45,7 +45,8 @@ const joinZoom = async (req: Request, res: Response) => {
 
   try {
     // Try to add the job to the store
-    const jobResult = await globalJobStore.addJob(async () => {
+    const jobId = botId || `job-${Date.now()}`;
+    const jobResult = await globalJobStore.addJob(jobId, async () => {
       // Initialize disk uploader
       const entityId = botId ?? eventId;
       const tempId = `${userId}${entityId}0`; // Using 0 as retry count
@@ -68,12 +69,24 @@ const joinZoom = async (req: Request, res: Response) => {
       // Create and join the meeting
       const bot = new ZoomBot(logger, correlationId);
       await bot.join({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader });
-    }, logger);
+    }, logger, {
+      userId,
+      teamId,
+      botId,
+      eventId,
+      platform: 'zoom',
+      meetingUrl: url,
+      ...(metadata || {}),
+    });
 
     if (!jobResult.accepted) {
+      const active = globalJobStore.getActiveCount();
+      const max = globalJobStore.getMaxConcurrent();
       return res.status(409).json({
         success: false,
-        error: 'Another meeting is currently being processed. Please try again later.',
+        error: `All ${max} bot slots are in use (${active}/${max} active). Please try again shortly.`,
+        activeJobs: active,
+        maxConcurrent: max,
         data: { userId, teamId, eventId, botId }
       });
     }

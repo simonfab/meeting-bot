@@ -19,9 +19,21 @@ let isbusy = 0;
 let gracefulShutdown = 0;
 
 app.get('/isbusy', async (req, res) => {
-  // Use the job store's isBusy status
-  const jobStoreBusy = globalJobStore.isBusy() ? 1 : 0;
-  return res.status(200).json({ success: true, data: jobStoreBusy });
+  return res.status(200).json({
+    success: true,
+    data: globalJobStore.isFull() ? 1 : 0,  // backwards compatible
+    activeJobs: globalJobStore.getActiveCount(),
+    maxConcurrent: globalJobStore.getMaxConcurrent(),
+  });
+});
+
+app.get('/jobs', async (req, res) => {
+  return res.status(200).json({
+    success: true,
+    jobs: globalJobStore.getActiveJobs(),
+    activeCount: globalJobStore.getActiveCount(),
+    maxConcurrent: globalJobStore.getMaxConcurrent(),
+  });
 });
 
 app.get('/health', async (req, res) => {
@@ -45,8 +57,7 @@ const isavailable = new client.Gauge({
 });
 
 app.get('/metrics', async (req, res) => {
-  // Use the job store's isBusy status for metrics
-  const jobStoreBusy = globalJobStore.isBusy() ? 1 : 0;
+  const jobStoreBusy = globalJobStore.isFull() ? 1 : 0;
   busyStatus.set(jobStoreBusy);
   isavailable.set(1 - jobStoreBusy);
   res.set('Content-Type', client.register.contentType);

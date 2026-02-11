@@ -107,4 +107,5 @@ export default {
     uploadConcurrency: process.env.AZURE_UPLOAD_CONCURRENCY ? Number(process.env.AZURE_UPLOAD_CONCURRENCY) : 4,
   },
   uploaderType: process.env.UPLOADER_TYPE ? (process.env.UPLOADER_TYPE as UploaderType) : 's3' as UploaderType,
+  maxConcurrentJobs: process.env.MAX_CONCURRENT_JOBS ? Number(process.env.MAX_CONCURRENT_JOBS) : 3,
 };

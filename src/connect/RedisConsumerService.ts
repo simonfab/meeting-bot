@@ -127,7 +127,8 @@ export class RedisConsumerService {
         timezone: meetingParams.timezone,
       });
 
-      const jobAcceptedResult = await globalJobStore.addJob(async () => {
+      const jobId = meetingParams.botId || `redis-job-${Date.now()}`;
+      const jobAcceptedResult = await globalJobStore.addJob(jobId, async () => {
         // Initialize disk uploader
         const entityId = meetingParams.botId ?? meetingParams.eventId;
         const tempId = `${meetingParams.userId}${entityId}0`; // Using 0 as retry count
@@ -179,7 +180,14 @@ export class RedisConsumerService {
             throw new Error(`Unsupported provider: ${meetingParams.provider}`);
         }
 
-      }, logger);
+      }, logger, {
+        userId: meetingParams.userId,
+        teamId: meetingParams.teamId,
+        botId: meetingParams.botId,
+        eventId: meetingParams.eventId,
+        platform: meetingParams.provider,
+        meetingUrl: meetingParams.url,
+      });
 
       if (jobAcceptedResult.accepted) {
         logger.info('Message successfully added to JobStore');

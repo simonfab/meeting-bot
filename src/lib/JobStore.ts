@@ -5,37 +5,54 @@ import { getErrorType } from '../util/logger';
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
 
+export interface JobInfo {
+  jobId: string;
+  startedAt: Date;
+  metadata?: Record<string, any>;
+}
+
 export class JobStore {
-  private isRunning: boolean = false;
+  private jobs: Map<string, JobInfo> = new Map();
+  private maxConcurrent: number;
   private shutdownRequested: boolean = false;
 
+  constructor(maxConcurrent: number = 3) {
+    this.maxConcurrent = maxConcurrent;
+  }
+
   async addJob<T>(
-    task: () => Promise<T>, 
+    jobId: string,
+    task: () => Promise<T>,
     logger: Logger,
+    metadata?: Record<string, any>,
     retryCount: number = 0
   ): Promise<{ accepted: boolean }> {
-    if (this.isRunning || this.shutdownRequested) {
+    if (this.jobs.size >= this.maxConcurrent || this.shutdownRequested) {
       return { accepted: false };
     }
 
-    this.isRunning = true;
-    
+    this.jobs.set(jobId, {
+      jobId,
+      startedAt: new Date(),
+      metadata,
+    });
+
     // Execute the task asynchronously without waiting for completion
     this.executeTaskWithRetry(task, logger, retryCount).then(() => {
-      logger.info('LogBasedMetric Bot has finished recording meeting successfully.');
+      logger.info('LogBasedMetric Bot has finished recording meeting successfully.', { jobId });
     }).catch((error) => {
       const errorType = getErrorType(error);
       if (error instanceof KnownError) {
-        logger.error('KnownError JobStore is permanently exiting:', { error });
+        logger.error('KnownError JobStore is permanently exiting:', { jobId, error });
       } else {
-        logger.error('Error executing task after multiple retries:', { error });
+        logger.error('Error executing task after multiple retries:', { jobId, error });
       }
-      logger.error(`LogBasedMetric Bot has permanently failed. [errorType: ${errorType}]`);
+      logger.error(`LogBasedMetric Bot has permanently failed. [errorType: ${errorType}]`, { jobId });
     }).finally(() => {
-      this.isRunning = false;
+      this.jobs.delete(jobId);
     });
 
-    logger.info('LogBasedMetric Bot job has been queued and started recording meeting.');
+    logger.info('LogBasedMetric Bot job has been queued and started recording meeting.', { jobId });
     return { accepted: true };
   }
 
@@ -71,7 +88,23 @@ export class JobStore {
   }
 
   isBusy(): boolean {
-    return this.isRunning;
+    return this.jobs.size >= this.maxConcurrent;
+  }
+
+  isFull(): boolean {
+    return this.jobs.size >= this.maxConcurrent;
+  }
+
+  getActiveCount(): number {
+    return this.jobs.size;
+  }
+
+  getMaxConcurrent(): number {
+    return this.maxConcurrent;
+  }
+
+  getActiveJobs(): JobInfo[] {
+    return Array.from(this.jobs.values());
   }
 
   /**
@@ -89,19 +122,19 @@ export class JobStore {
   }
 
   /**
-   * Wait for ongoing tasks to complete
+   * Wait for all ongoing tasks to complete
    * @returns Promise that resolves when all tasks are complete
    */
   async waitForCompletion(): Promise<void> {
-    if (!this.isRunning) {
+    if (this.jobs.size === 0) {
       return; // No tasks running, can shutdown immediately
     }
 
-    console.log('Waiting for ongoing tasks to complete...');
-    
+    console.log(`Waiting for ${this.jobs.size} ongoing tasks to complete...`);
+
     return new Promise<void>((resolve) => {
       const checkCompletion = () => {
-        if (!this.isRunning) {
+        if (this.jobs.size === 0) {
           console.log('All tasks completed successfully');
           resolve();
         } else {
@@ -111,4 +144,4 @@ export class JobStore {
       checkCompletion();
     });
   }
-} 
+}
