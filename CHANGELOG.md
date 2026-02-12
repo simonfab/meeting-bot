@@ -15,11 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Graceful shutdown handling
 - Prometheus metrics integration
 - Stealth mode browser automation
-- Single job execution system
 - Recording functionality with duration limits
+- Concurrent bot sessions via Map-based JobStore (configurable via `MAX_CONCURRENT_JOBS`, default: 3)
+- `/jobs` endpoint to list all active bot sessions with metadata
+- Enhanced `/isbusy` endpoint with `activeJobs` and `maxConcurrent` fields
 
 ### Changed
-- N/A
+- JobStore refactored from single-boolean to Map-based store supporting N concurrent Playwright instances
+- 409 responses now include capacity details (`activeJobs`, `maxConcurrent`)
 
 ### Deprecated
 - N/A

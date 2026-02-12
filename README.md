@@ -11,7 +11,7 @@ An open-source automation bot for joining and recording video meetings across mu
 
 - **Multi-Platform Support**: Join meetings on Google Meet, Microsoft Teams, and Zoom
 - **Automated Recording**: Capture meeting recordings with configurable duration limits
-- **Single Job Execution**: Ensures only one meeting is processed at a time across the entire system
+- **Concurrent Bot Sessions**: Run multiple meetings simultaneously with configurable concurrency (default: 3 concurrent bots via `MAX_CONCURRENT_JOBS`)
 - **Dual Integration Options**: RESTful API endpoints and Redis message queue for flexible integration
 - **Asynchronous Processing**: Redis queue support for high-throughput, scalable meeting requests
 - **Docker Support**: Containerized deployment with Docker and Docker Compose
@@ -63,9 +63,10 @@ The server will start on `http://localhost:3000`
 
 ### How Meeting Bot Works
 
-Meeting Bot operates with a single job execution model to ensure reliable meeting processing:
+Meeting Bot supports concurrent bot sessions, allowing multiple meetings to be recorded simultaneously:
 
-- **Single Job Processing**: Meeting Bot accepts only one job at a time and works until it's completely finished before accepting another job
+- **Concurrent Processing**: Meeting Bot can run multiple Playwright instances in parallel, each joining a separate meeting. The number of concurrent slots is controlled by `MAX_CONCURRENT_JOBS` (default: 3)
+- **Capacity Management**: When all slots are in use, new requests receive a 409 response with capacity details. Once a slot frees up, new meetings are accepted automatically
 - **Automatic Retry**: The bot automatically retries on certain errors such as automation failures or when it takes too long to admit the bot into a meeting
 
 ### API Endpoints
@@ -188,6 +189,35 @@ Notes:
 GET /isbusy
 ```
 
+Response:
+```json
+{
+  "success": true,
+  "data": 1,
+  "activeJobs": 3,
+  "maxConcurrent": 3
+}
+```
+
+`data` returns `1` when all slots are full (backwards compatible), `0` when slots are available. `activeJobs` and `maxConcurrent` provide detailed capacity info.
+
+#### List Active Jobs
+```bash
+GET /jobs
+```
+
+Response:
+```json
+{
+  "success": true,
+  "jobs": [
+    { "jobId": "abc-123", "startedAt": "2025-09-08T12:00:00Z", "metadata": { ... } }
+  ],
+  "activeCount": 1,
+  "maxConcurrent": 3
+}
+```
+
 #### Get Metrics
 ```bash
 GET /metrics
@@ -209,12 +239,14 @@ GET /metrics
 }
 ```
 
-**Busy Response (409 Conflict):**
+**At Capacity Response (409 Conflict):**
 ```json
 {
   "success": false,
-  "message": "System is currently busy processing another meeting",
-  "error": "BUSY"
+  "error": "All 3 bot slots are in use (3/3 active). Please try again shortly.",
+  "activeJobs": 3,
+  "maxConcurrent": 3,
+  "data": { "userId": "user123", "teamId": "team123", "eventId": "...", "botId": "..." }
 }
 ```
 
@@ -308,7 +340,7 @@ r.rpush('jobs:meetbot:list', json.dumps(message))
 - **FIFO Queue**: Messages are processed in First-In-First-Out order
 - **BLPOP Processing**: The bot uses `BLPOP` to consume messages from the queue
 - **Automatic Processing**: Messages are automatically picked up and processed by the Redis consumer service
-- **Single Job Execution**: Only one meeting is processed at a time across the entire system
+- **Concurrent Processing**: Multiple meetings can be processed simultaneously, up to the configured `MAX_CONCURRENT_JOBS` limit
 
 #### Redis Configuration
 
@@ -453,6 +485,7 @@ Notes:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `MAX_CONCURRENT_JOBS` | Maximum number of simultaneous bot sessions | `3` |
 | `MAX_RECORDING_DURATION_MINUTES` | Maximum recording duration in minutes | `180` |
 | `MEETING_INACTIVITY_MINUTES` | Continuous inactivity duration after which the bot will end meeting recording | `1` |
 | `INACTIVITY_DETECTION_START_DELAY_MINUTES` | Initial grace period at the start of recording before inactivity detection begins | `1` |
@@ -528,7 +561,7 @@ src/
 ### Key Components
 
 - **AbstractMeetBot**: Base class for all platform bots
-- **JobStore**: Manages single job execution across the system
+- **JobStore**: Manages concurrent bot sessions via a Map-based store with configurable slot limits
 - **RecordingTask**: Handles meeting recording functionality
 - **ContextBridgeTask**: Manages browser context and automation
 - **RedisMessageBroker**: Handles Redis queue operations (RPUSH/BLPOP)
@@ -584,6 +617,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ Microsoft Teams support  
 - ✅ Zoom support
 - ✅ Recording functionality
+- ✅ Concurrent bot sessions (configurable via `MAX_CONCURRENT_JOBS`)
 - ✅ Docker deployment
 - ✅ REST API support
 - ✅ Redis message queue support
