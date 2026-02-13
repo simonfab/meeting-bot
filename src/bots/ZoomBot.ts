@@ -5,6 +5,7 @@ import config from '../config';
 import { WaitingAtLobbyRetryError } from '../error';
 import { v4 } from 'uuid';
 import { patchBotStatus } from '../services/botService';
+import { notifyMafStatus } from '../services/notificationService';
 import { RecordingTask } from '../tasks/RecordingTask';
 import { ContextBridgeTask } from '../tasks/ContextBridgeTask';
 import { getWaitingPromise } from '../lib/promise';
@@ -37,7 +38,7 @@ export class ZoomBot extends BotBase {
 
   // TODO use base class for shared functions such as bot status and bot logging
   // TODO Lift the JoinParams to the constructor argument
-  async join({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader }: JoinParams): Promise<void> {
+  async join({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader, metadata }: JoinParams): Promise<void> {
     const _state: BotStatus[] = ['processing'];
 
     const handleUpload = async () => {
@@ -48,7 +49,7 @@ export class ZoomBot extends BotBase {
 
     try {
       const pushState = (st: BotStatus) => _state.push(st);
-      await this.joinMeeting({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, pushState, uploader });
+      await this.joinMeeting({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, pushState, uploader, metadata });
       await patchBotStatus({ botId, eventId, provider: 'zoom', status: _state, token: bearerToken }, this._logger);
 
       // Finish the upload from the temp video
@@ -68,7 +69,7 @@ export class ZoomBot extends BotBase {
   }
 
   private async joinMeeting({ pushState, ...params }: JoinParams & { pushState(state: BotStatus): void }): Promise<void> {
-    const { url, name } = params;
+    const { url, name, metadata } = params;
     this._logger.info('Launching browser for Zoom...', { userId: params.userId });
 
     this.page = await createBrowserContext(url, this._correlationId, 'zoom');
@@ -290,9 +291,15 @@ export class ZoomBot extends BotBase {
     }
 
     pushState('joined');
+    if (metadata?.meeting_id && metadata?.tenantId) {
+      notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'joining', this._logger);
+    }
 
     // Recording the meeting page
     this._logger.info('Begin recording...');
+    if (metadata?.meeting_id && metadata?.tenantId) {
+      notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'recording', this._logger);
+    }
     await this.recordMeetingPage({ ...params });
 
     pushState('finished');

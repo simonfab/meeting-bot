@@ -96,3 +96,40 @@ export async function notifyRecordingCompleted(payload: RecordingCompletedPayloa
     rpushToRedisList(payload, logger),
   ]);
 }
+
+/**
+ * Fire-and-forget status update to MAF API.
+ * Called at key stages (joining, recording) so the frontend can show progress.
+ * Non-blocking — does not await response and never throws.
+ */
+export function notifyMafStatus(
+  meetingId: number | string,
+  tenantId: number | string,
+  status: 'joining' | 'recording' | 'uploading',
+  logger: Logger,
+) {
+  if (!config.notifyWebhookEnabled || !config.notifyWebhookUrl) return;
+
+  // Derive status-update URL from the recording-complete webhook URL
+  // e.g. http://host.docker.internal:8001/api/meeting-bot/recording-complete
+  //   -> http://host.docker.internal:8001/api/meeting-bot/status-update
+  const statusUrl = config.notifyWebhookUrl.replace(/\/recording-complete$/, '/status-update');
+
+  const body = JSON.stringify({
+    meeting_id: Number(meetingId),
+    tenant_id: Number(tenantId),
+    status,
+  });
+  const signature = signPayload(body, config.notifyWebhookSecret);
+
+  // Fire and forget — don't await, don't block
+  axios.post(statusUrl, body, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(signature ? { 'X-Webhook-Signature': signature } : {}),
+    },
+    timeout: 5000,
+  })
+    .then(() => logger.info(`MAF status update sent: ${status}`, { meetingId }))
+    .catch((err: any) => logger.warn(`MAF status update failed (non-fatal): ${err?.message}`, { meetingId, status }));
+}

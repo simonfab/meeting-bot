@@ -22,6 +22,8 @@ export interface JoinParams {
   botId?: string;
   eventId?: string;
   uploader: IUploader;
+  /** Custom metadata from dispatch (includes meeting_id, tenantId, etc.) */
+  metadata?: Record<string, any>;
 }
 
 export abstract class AbstractMeetBot {

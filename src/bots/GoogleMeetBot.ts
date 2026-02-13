@@ -14,6 +14,7 @@ import { uploadDebugImage } from '../services/bugService';
 import createBrowserContext from '../lib/chromium';
 import { GOOGLE_LOBBY_MODE_HOST_TEXT, GOOGLE_REQUEST_DENIED, GOOGLE_REQUEST_TIMEOUT } from '../constants';
 import { vp9MimeType, webmMimeType } from '../lib/recording';
+import { notifyMafStatus } from '../services/notificationService';
 
 export class GoogleMeetBot extends MeetBotBase {
   private _logger: Logger;
@@ -25,7 +26,7 @@ export class GoogleMeetBot extends MeetBotBase {
     this._correlationId = correlationId;
   }
 
-  async join({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader }: JoinParams): Promise<void> {
+  async join({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader, metadata }: JoinParams): Promise<void> {
     const _state: BotStatus[] = ['processing'];
 
     const handleUpload = async () => {
@@ -37,7 +38,7 @@ export class GoogleMeetBot extends MeetBotBase {
 
     try {
       const pushState = (st: BotStatus) => _state.push(st);
-      await this.joinMeeting({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader, pushState });
+      await this.joinMeeting({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader, metadata, pushState });
 
       // Finish the upload from the temp video
       const uploadResult = await handleUpload();
@@ -65,7 +66,7 @@ export class GoogleMeetBot extends MeetBotBase {
     }
   }
 
-  private async joinMeeting({ url, name, teamId, userId, eventId, botId, pushState, uploader }: JoinParams & { pushState(state: BotStatus): void }): Promise<void> {
+  private async joinMeeting({ url, name, teamId, userId, eventId, botId, pushState, uploader, metadata }: JoinParams & { pushState(state: BotStatus): void }): Promise<void> {
     this._logger.info('Launching browser...');
 
     this.page = await createBrowserContext(url, this._correlationId, 'google');
@@ -366,6 +367,9 @@ export class GoogleMeetBot extends MeetBotBase {
     }
 
     pushState('joined');
+    if (metadata?.meeting_id && metadata?.tenantId) {
+      notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'joining', this._logger);
+    }
 
     try {
       this._logger.info('Waiting for the "Got it" button...');
@@ -467,6 +471,9 @@ export class GoogleMeetBot extends MeetBotBase {
 
     // Recording the meeting page
     this._logger.info('Begin recording...');
+    if (metadata?.meeting_id && metadata?.tenantId) {
+      notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'recording', this._logger);
+    }
     await this.recordMeetingPage({ teamId, eventId, userId, botId, uploader });
 
     pushState('finished');

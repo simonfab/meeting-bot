@@ -5,6 +5,7 @@ import { WaitingAtLobbyRetryError } from '../error';
 import { handleWaitingAtLobbyError, MeetBotBase } from './MeetBotBase';
 import { v4 } from 'uuid';
 import { patchBotStatus } from '../services/botService';
+import { notifyMafStatus } from '../services/notificationService';
 import { IUploader } from '../middleware/disk-uploader';
 import { Logger } from 'winston';
 import { retryActionWithWait } from '../util/resilience';
@@ -29,7 +30,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     this._logger = logger;
     this._correlationId = correlationId;
   }
-  async join({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader }: JoinParams): Promise<void> {
+  async join({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader, metadata }: JoinParams): Promise<void> {
     const _state: BotStatus[] = ['processing'];
 
     const handleUpload = async () => {
@@ -41,7 +42,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
     try {
       const pushState = (st: BotStatus) => _state.push(st);
-      await this.joinMeeting({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, pushState, uploader });
+      await this.joinMeeting({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, pushState, uploader, metadata });
 
       // Finish the upload from the temp video
       const uploadResult = await handleUpload();
@@ -80,7 +81,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     }
   }
 
-  private async joinMeeting({ url, name, teamId, userId, eventId, botId, pushState, uploader }: JoinParams & { pushState(state: BotStatus): void }): Promise<void> {
+  private async joinMeeting({ url, name, teamId, userId, eventId, botId, pushState, uploader, metadata }: JoinParams & { pushState(state: BotStatus): void }): Promise<void> {
     // Skip pre-warming — go straight to the meeting URL.
     // The old approach opened a throwaway browser just to trigger Chrome dialogs, adding ~5-8s.
     // Chrome permission dialogs are handled inline during the actual join flow.
@@ -210,6 +211,9 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     }
 
     pushState('joined');
+    if (metadata?.meeting_id && metadata?.tenantId) {
+      notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'joining', this._logger);
+    }
 
     // Dismiss device notifications and close buttons
     await this.dismissDeviceChecksAndNotifications();
@@ -220,6 +224,9 @@ export class MicrosoftTeamsBot extends MeetBotBase {
 
     // Recording the meeting page with ffmpeg
     this._logger.info('Begin recording with ffmpeg...');
+    if (metadata?.meeting_id && metadata?.tenantId) {
+      notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'recording', this._logger);
+    }
     await this.recordMeetingPageWithFFmpeg({ teamId, userId, eventId, botId, uploader });
 
     pushState('finished');

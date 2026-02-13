@@ -68,7 +68,7 @@ const joinMicrosoftTeams = async (req: Request, res: Response) => {
 
       // Create and join the meeting
       const bot = new MicrosoftTeamsBot(logger, correlationId);
-      await bot.join({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader });
+      await bot.join({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader, metadata });
     }, logger, {
       userId,
       teamId,
