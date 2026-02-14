@@ -6,6 +6,7 @@ import { WaitingAtLobbyRetryError } from '../error';
 import { v4 } from 'uuid';
 import { patchBotStatus } from '../services/botService';
 import { notifyMafStatus } from '../services/notificationService';
+import { globalJobStore } from '../lib/globalJobStore';
 import { RecordingTask } from '../tasks/RecordingTask';
 import { ContextBridgeTask } from '../tasks/ContextBridgeTask';
 import { getWaitingPromise } from '../lib/promise';
@@ -73,6 +74,13 @@ export class ZoomBot extends BotBase {
     this._logger.info('Launching browser for Zoom...', { userId: params.userId });
 
     this.page = await createBrowserContext(url, this._correlationId, 'zoom');
+
+    // Register cancel callback so the job can be force-killed
+    const jobId = params.botId || `job-zoom-${Date.now()}`;
+    globalJobStore.registerCancelCallback(jobId, async () => {
+      this._logger.info('Cancel requested — closing browser', { botId: params.botId });
+      await this.page.context().browser()?.close();
+    });
 
     await this.page.route('**/*.exe', (route) => {
       this._logger.info(`Detected .exe download: ${route.request().url()?.split('download')[0]}`);

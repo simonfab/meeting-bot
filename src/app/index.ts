@@ -76,6 +76,23 @@ app.get('/debug', async (req, res, next) => {
   res.status(200).send({});
 });
 
+app.post('/cancel/:jobId', async (req, res) => {
+  const { jobId } = req.params;
+  const cancelled = await globalJobStore.cancelJob(jobId);
+
+  if (cancelled) {
+    return res.status(200).json({
+      success: true,
+      message: `Job ${jobId} cancelled`,
+    });
+  } else {
+    return res.status(404).json({
+      success: false,
+      error: `Job ${jobId} not found or already completed`,
+    });
+  }
+});
+
 app.use('/google', googleRouter);
 app.use('/microsoft', microsoftRouter);
 app.use('/zoom', zoomRouter);

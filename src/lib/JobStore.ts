@@ -13,6 +13,7 @@ export interface JobInfo {
 
 export class JobStore {
   private jobs: Map<string, JobInfo> = new Map();
+  private cancelCallbacks: Map<string, () => Promise<void>> = new Map();
   private maxConcurrent: number;
   private shutdownRequested: boolean = false;
 
@@ -50,6 +51,7 @@ export class JobStore {
       logger.error(`LogBasedMetric Bot has permanently failed. [errorType: ${errorType}]`, { jobId });
     }).finally(() => {
       this.jobs.delete(jobId);
+      this.cancelCallbacks.delete(jobId);
     });
 
     logger.info('LogBasedMetric Bot job has been queued and started recording meeting.', { jobId });
@@ -105,6 +107,43 @@ export class JobStore {
 
   getActiveJobs(): JobInfo[] {
     return Array.from(this.jobs.values());
+  }
+
+  /**
+   * Register a cancel callback for a running job.
+   * Called by bots after creating their browser so the job can be force-cancelled.
+   */
+  registerCancelCallback(jobId: string, callback: () => Promise<void>): void {
+    this.cancelCallbacks.set(jobId, callback);
+  }
+
+  /**
+   * Cancel a running job by invoking its cancel callback (closes browser).
+   * The browser close triggers an error in the bot's promise chain,
+   * which naturally cleans up the job via the finally() handler.
+   */
+  async cancelJob(jobId: string): Promise<boolean> {
+    const callback = this.cancelCallbacks.get(jobId);
+    if (!callback) {
+      // Job not found or no cancel callback registered — force-remove from map
+      if (this.jobs.has(jobId)) {
+        this.jobs.delete(jobId);
+        this.cancelCallbacks.delete(jobId);
+        return true;
+      }
+      return false;
+    }
+
+    try {
+      await callback();
+    } catch {
+      // Browser may already be closed — that's fine
+    }
+
+    // Force-remove in case the promise chain hasn't cleaned up yet
+    this.jobs.delete(jobId);
+    this.cancelCallbacks.delete(jobId);
+    return true;
   }
 
   /**

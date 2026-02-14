@@ -15,6 +15,7 @@ import createBrowserContext from '../lib/chromium';
 import { GOOGLE_LOBBY_MODE_HOST_TEXT, GOOGLE_REQUEST_DENIED, GOOGLE_REQUEST_TIMEOUT } from '../constants';
 import { vp9MimeType, webmMimeType } from '../lib/recording';
 import { notifyMafStatus } from '../services/notificationService';
+import { globalJobStore } from '../lib/globalJobStore';
 
 export class GoogleMeetBot extends MeetBotBase {
   private _logger: Logger;
@@ -70,6 +71,13 @@ export class GoogleMeetBot extends MeetBotBase {
     this._logger.info('Launching browser...');
 
     this.page = await createBrowserContext(url, this._correlationId, 'google');
+
+    // Register cancel callback so the job can be force-killed
+    const jobId = botId || `job-google-${Date.now()}`;
+    globalJobStore.registerCancelCallback(jobId, async () => {
+      this._logger.info('Cancel requested — closing browser', { botId });
+      await this.page.context().browser()?.close();
+    });
 
     this._logger.info('Navigating to Google Meet URL...');
     await this.page.goto(url, { waitUntil: 'networkidle' });

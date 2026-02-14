@@ -6,6 +6,7 @@ import { handleWaitingAtLobbyError, MeetBotBase } from './MeetBotBase';
 import { v4 } from 'uuid';
 import { patchBotStatus } from '../services/botService';
 import { notifyMafStatus } from '../services/notificationService';
+import { globalJobStore } from '../lib/globalJobStore';
 import { IUploader } from '../middleware/disk-uploader';
 import { Logger } from 'winston';
 import { retryActionWithWait } from '../util/resilience';
@@ -88,6 +89,13 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     this._logger.info('Launching browser for Microsoft Teams meeting...');
 
     this.page = await createBrowserContext(url, this._correlationId, 'microsoft');
+
+    // Register cancel callback so the job can be force-killed
+    const jobId = botId || `job-microsoft-${Date.now()}`;
+    globalJobStore.registerCancelCallback(jobId, async () => {
+      this._logger.info('Cancel requested — closing browser', { botId });
+      await this.page.context().browser()?.close();
+    });
 
     this._logger.info('Navigating to Microsoft Teams Meeting URL...');
     await this.page.goto(url, { waitUntil: 'networkidle' });
