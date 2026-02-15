@@ -91,7 +91,7 @@ export class GoogleMeetBot extends MeetBotBase {
         await retryActionWithWait(
           'Clicking the "Continue without microphone and camera" button',
           async () => {
-            await this.page.getByRole('button', { name: 'Continue without microphone and camera' }).waitFor({ timeout: 5000 });
+            await this.page.getByRole('button', { name: 'Continue without microphone and camera' }).waitFor({ timeout: 1000 });
             await this.page.getByRole('button', { name: 'Continue without microphone and camera' }).click();
           },
           this._logger,
