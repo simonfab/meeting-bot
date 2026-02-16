@@ -650,6 +650,14 @@ class DiskUploader implements IUploader {
 
       // Send optional notifications on success
       if (uploadResult) {
+        this._logger.info('Recording upload metadata', {
+          uploaderType: config.uploaderType,
+          contentType: this.contentType,
+          fileExtension: this.fileExtension,
+          blobUrl: this.lastUploadedBlobUrl,
+          storage: this.lastStorageDetails,
+          recordingId: this.lastRecordingId ?? this._tempFileId,
+        });
         try {
           const payload: RecordingCompletedPayload = {
             recordingId: this.lastRecordingId ?? this._tempFileId,

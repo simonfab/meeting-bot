@@ -19,6 +19,21 @@ export const NODE_ENV: Environment = ENVIRONMENTS.includes(
 
 console.log('NODE_ENV', process.env.NODE_ENV);
 
+const isAudioOnlyRecordingEnabled = (() => {
+  const raw = process.env.RECORD_AUDIO_ONLY;
+  if (typeof raw === 'string' && raw.trim().toLowerCase() === 'false') {
+    return false;
+  }
+  return true;
+})();
+
+console.log(
+  'RECORD_AUDIO_ONLY',
+  process.env.RECORD_AUDIO_ONLY ?? '(unset)',
+  '=>',
+  isAudioOnlyRecordingEnabled
+);
+
 const requiredSettings = [
   'GCP_DEFAULT_REGION',
   'GCP_MISC_BUCKET',
@@ -64,6 +79,9 @@ export default {
   joinWaitTime: process.env.JOIN_WAIT_TIME_MINUTES ? Number(process.env.JOIN_WAIT_TIME_MINUTES) : 10,
   // Number of retries for transient errors (not applied to WaitingAtLobbyRetryError)
   retryCount: process.env.RETRY_COUNT ? Number(process.env.RETRY_COUNT) : 2,
+  // Audio-only recording is enabled by default.
+  // Set RECORD_AUDIO_ONLY=false to revert to legacy audio+video capture.
+  recordAudioOnly: isAudioOnlyRecordingEnabled,
   miscStorageBucket: process.env.GCP_MISC_BUCKET,
   miscStorageFolder: process.env.GCP_MISC_BUCKET_FOLDER ? process.env.GCP_MISC_BUCKET_FOLDER : 'meeting-bot',
   region: process.env.GCP_DEFAULT_REGION,

@@ -96,6 +96,7 @@ Required environment variables:
 Optional environment variables:
 - `MAX_CONCURRENT_JOBS`: Number of simultaneous bot sessions (default: 3)
 - `MAX_RECORDING_DURATION_MINUTES`: Maximum recording duration (default: 180)
+- `RECORD_AUDIO_ONLY`: Audio-only recording mode (default: true; only explicit `false` disables)
 - `PORT`: Server port (default: 3000)
 - `NODE_ENV`: Environment mode (default: production)
 
@@ -111,6 +112,7 @@ services:
     environment:
       - NODE_ENV=production
       - MAX_CONCURRENT_JOBS=3
+      - RECORD_AUDIO_ONLY=true
       - GCP_DEFAULT_REGION=us-central1
       - GCP_MISC_BUCKET=your-meeting-recordings
       - MAX_RECORDING_DURATION_MINUTES=60

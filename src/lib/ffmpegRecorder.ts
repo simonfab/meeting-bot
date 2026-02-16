@@ -1,11 +1,15 @@
 import { spawn, ChildProcess } from 'child_process';
 import { Logger } from 'winston';
+import config from '../config';
+
+type FFmpegRecordingMode = 'audio-only' | 'audio-video';
 
 export class FFmpegRecorder {
   private ffmpegProcess: ChildProcess | null = null;
   private outputPath: string;
   private logger: Logger;
   private exitCallback: ((code: number | null) => void) | null = null;
+  private currentMode: FFmpegRecordingMode = 'audio-video';
 
   constructor(outputPath: string, logger: Logger) {
     this.outputPath = outputPath;
@@ -19,70 +23,107 @@ export class FFmpegRecorder {
     this.exitCallback = callback;
   }
 
-  async start(): Promise<void> {
+  private buildAudioVideoArgs(): string[] {
+    return [
+      '-y',
+      '-loglevel', 'info',
+
+      // Video input from X11 display (with Y offset to skip address bar)
+      '-f', 'x11grab',
+      '-video_size', '1280x720',
+      '-framerate', '25',
+      '-draw_mouse', '0',
+      '-i', `${process.env.DISPLAY || ':99'}+0,80`,
+
+      // Audio input from PulseAudio monitor
+      '-f', 'pulse',
+      '-ac', '2',
+      '-ar', '44100',
+      '-i', 'virtual_output.monitor',
+
+      // Video encoding - VP8 for WebM
+      '-c:v', 'libvpx',
+      '-deadline', 'realtime',
+      '-cpu-used', '8',
+      '-b:v', '0',
+      '-crf', '35',
+      '-g', '50',
+      '-threads', '0',
+
+      // Audio encoding - Opus for WebM
+      '-c:a', 'libopus',
+      '-b:a', '128k',
+      '-ar', '48000',
+      '-ac', '2',
+
+      '-f', 'webm',
+      this.outputPath,
+    ];
+  }
+
+  private buildAudioOnlyArgs(): string[] {
+    return [
+      '-y',
+      '-loglevel', 'info',
+
+      // Audio-only capture from PulseAudio monitor
+      '-f', 'pulse',
+      '-ac', '2',
+      '-ar', '44100',
+      '-i', 'virtual_output.monitor',
+
+      // Keep output as WebM for downstream compatibility
+      '-c:a', 'libopus',
+      '-b:a', '128k',
+      '-ar', '48000',
+      '-ac', '2',
+      '-vn',
+
+      '-f', 'webm',
+      this.outputPath,
+    ];
+  }
+
+  private getArgsForMode(mode: FFmpegRecordingMode): string[] {
+    if (mode === 'audio-only') {
+      return this.buildAudioOnlyArgs();
+    }
+    return this.buildAudioVideoArgs();
+  }
+
+  private async startWithMode(mode: FFmpegRecordingMode): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        // FFmpeg command to capture X11 display and PulseAudio monitor
-        const ffmpegArgs = [
-          '-y', // Overwrite output file
-          '-loglevel', 'info', // Verbose logging for debugging
+        const ffmpegArgs = this.getArgsForMode(mode);
 
-          // Video input from X11 display (with Y offset to skip address bar)
-          '-f', 'x11grab',
-          '-video_size', '1280x720',
-          '-framerate', '25',
-          '-draw_mouse', '0',
-          '-i', `${process.env.DISPLAY || ':99'}+0,80`,  // +0,80 = X offset 0, Y offset 80 (skip address bar)
-
-          // Audio input from PulseAudio monitor
-          '-f', 'pulse',
-          '-ac', '2',
-          '-ar', '44100',
-          '-i', 'virtual_output.monitor',
-
-          // Video encoding - VP8 for WebM (no finalization delay unlike MP4)
-          '-c:v', 'libvpx',
-          '-deadline', 'realtime',
-          '-cpu-used', '8',
-          '-b:v', '0',            // Unconstrained - let CRF control quality
-          '-crf', '35',           // Quality-based (4-63, higher = smaller). Screen content compresses well
-          '-g', '50', // Keyframe interval
-          '-threads', '0',
-
-          // Audio encoding - Opus for WebM
-          '-c:a', 'libopus',
-          '-b:a', '128k',
-          '-ar', '48000',
-          '-ac', '2',
-
-          // Output format
-          '-f', 'webm',
-          this.outputPath
-        ];
-
-        this.logger.info('Starting ffmpeg with args:', { args: ffmpegArgs.join(' ') });
+        this.logger.info('Starting ffmpeg', {
+          mode,
+          args: ffmpegArgs.join(' '),
+        });
 
         // Ensure FFmpeg can connect to PulseAudio
         const ffmpegEnv = {
           ...process.env,
           XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || '/run/user/1001',
-          DISPLAY: process.env.DISPLAY || ':99'
+          DISPLAY: process.env.DISPLAY || ':99',
         };
 
         this.logger.info('FFmpeg environment:', {
+          mode,
           XDG_RUNTIME_DIR: ffmpegEnv.XDG_RUNTIME_DIR,
           DISPLAY: ffmpegEnv.DISPLAY,
           USER: process.env.USER,
-          HOME: process.env.HOME
+          HOME: process.env.HOME,
         });
 
-        this.ffmpegProcess = spawn('ffmpeg', ffmpegArgs, {
-          stdio: ['pipe', 'pipe', 'pipe'],  // Enable stdin to send 'q' quit signal
-          env: ffmpegEnv
+        const processRef = spawn('ffmpeg', ffmpegArgs, {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: ffmpegEnv,
         });
+        this.ffmpegProcess = processRef;
 
         // Handle stdout
-        this.ffmpegProcess.stdout?.on('data', (data) => {
+        processRef.stdout?.on('data', (data) => {
           this.logger.debug('ffmpeg stdout:', data.toString());
         });
 
@@ -91,7 +132,7 @@ export class FFmpegRecorder {
         const startTime = Date.now();
 
         // Handle stderr (ffmpeg outputs progress here)
-        this.ffmpegProcess.stderr?.on('data', (data) => {
+        processRef.stderr?.on('data', (data) => {
           const output = data.toString();
           stderrBuffer += output;
 
@@ -99,15 +140,15 @@ export class FFmpegRecorder {
 
           // Log errors and important messages
           if (output.includes('error') || output.includes('Error') || output.includes('Invalid') || output.includes('Failed')) {
-            this.logger.error('ffmpeg error:', output);
+            this.logger.error('ffmpeg error:', { mode, output });
           } else if (output.includes('Duration') || output.includes('Stream #') || output.includes('video:') || output.includes('audio:')) {
-            this.logger.info('ffmpeg info:', output.trim());
+            this.logger.info('ffmpeg info:', { mode, output: output.trim() });
           } else if (isStartupPhase) {
             // Log all stderr at info level during startup (first 5 seconds) to catch initialization errors
-            this.logger.info('ffmpeg startup:', output.trim().substring(0, 200));
+            this.logger.info('ffmpeg startup:', { mode, output: output.trim().substring(0, 200) });
           } else {
             // After startup, only debug log progress updates
-            this.logger.debug('ffmpeg progress:', output.substring(0, 150));
+            this.logger.debug('ffmpeg progress:', { mode, output: output.substring(0, 150) });
           }
         });
 
@@ -115,8 +156,8 @@ export class FFmpegRecorder {
         let settled = false;
 
         // Handle process exit
-        this.ffmpegProcess.on('exit', (code, signal) => {
-          this.logger.info('ffmpeg process exited', { code, signal });
+        processRef.on('exit', (code, signal) => {
+          this.logger.info('ffmpeg process exited', { mode, code, signal });
 
           // Notify callback if registered
           if (this.exitCallback) {
@@ -128,23 +169,29 @@ export class FFmpegRecorder {
             this.logger.error('FFmpeg failed with exit code', code);
             const trimmedBuffer = stderrBuffer.trim();
             if (trimmedBuffer) {
-              this.logger.error('FFmpeg stderr output:', trimmedBuffer);
+              this.logger.error('FFmpeg stderr output:', { mode, stderr: trimmedBuffer });
             } else {
               this.logger.error('FFmpeg stderr was empty - process may have crashed without error message');
               this.logger.error('Common causes: screen size mismatch (check Xvfb resolution vs capture area + offset), PulseAudio not running, X11 display not available');
+            }
+            if (this.ffmpegProcess === processRef) {
+              this.ffmpegProcess = null;
             }
 
             // If we haven't settled yet (early failure during startup), reject
             if (!settled) {
               settled = true;
-              reject(new Error(`FFmpeg exited with code ${code}: ${trimmedBuffer || 'no error details'}`));
+              reject(new Error(`FFmpeg (${mode}) exited with code ${code}: ${trimmedBuffer || 'no error details'}`));
             }
           }
         });
 
         // Handle errors
-        this.ffmpegProcess.on('error', (error) => {
-          this.logger.error('ffmpeg process error:', error);
+        processRef.on('error', (error) => {
+          this.logger.error('ffmpeg process error:', { mode, error });
+          if (this.ffmpegProcess === processRef) {
+            this.ffmpegProcess = null;
+          }
           if (!settled) {
             settled = true;
             reject(error);
@@ -158,22 +205,60 @@ export class FFmpegRecorder {
             return;
           }
 
-          if (this.ffmpegProcess && !this.ffmpegProcess.killed && this.ffmpegProcess.exitCode === null) {
-            this.logger.info('ffmpeg recording started successfully');
+          if (processRef && !processRef.killed && processRef.exitCode === null) {
+            this.logger.info('ffmpeg recording started successfully', { mode });
             settled = true;
             resolve();
           } else {
-            this.logger.error('ffmpeg failed to start or already exited');
+            this.logger.error('ffmpeg failed to start or already exited', { mode });
             settled = true;
-            reject(new Error('ffmpeg failed to start'));
+            reject(new Error(`ffmpeg (${mode}) failed to start`));
           }
         }, 2000);
 
       } catch (error) {
-        this.logger.error('Error starting ffmpeg:', error);
+        this.logger.error('Error starting ffmpeg:', { mode, error });
         reject(error);
       }
     });
+  }
+
+  async start(): Promise<void> {
+    const initialMode: FFmpegRecordingMode = config.recordAudioOnly ? 'audio-only' : 'audio-video';
+    const fallbackMode: FFmpegRecordingMode = 'audio-video';
+    const modesToTry: FFmpegRecordingMode[] = initialMode === fallbackMode
+      ? [initialMode]
+      : [initialMode, fallbackMode];
+
+    let lastError: unknown;
+    for (let i = 0; i < modesToTry.length; i++) {
+      const mode = modesToTry[i];
+      this.currentMode = mode;
+      try {
+        await this.startWithMode(mode);
+        if (i > 0) {
+          this.logger.warn('FFmpeg fallback mode engaged', { mode });
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        this.logger.error('FFmpeg start attempt failed', {
+          mode,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (i < modesToTry.length - 1) {
+          this.logger.warn('Retrying FFmpeg start with fallback mode', {
+            fromMode: mode,
+            toMode: modesToTry[i + 1],
+          });
+        }
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+    throw new Error('FFmpeg failed to start in all modes');
   }
 
   async stop(): Promise<void> {
@@ -184,7 +269,7 @@ export class FFmpegRecorder {
         return;
       }
 
-      this.logger.info('Sending quit signal to ffmpeg...');
+      this.logger.info('Sending quit signal to ffmpeg...', { mode: this.currentMode });
 
       // Flag to track if already resolved
       let resolved = false;
@@ -221,7 +306,7 @@ export class FFmpegRecorder {
       this.ffmpegProcess.on('exit', (code, signal) => {
         if (!resolved) {
           clearTimeout(timeout);
-          this.logger.info('ffmpeg process exited gracefully', { code, signal });
+          this.logger.info('ffmpeg process exited gracefully', { mode: this.currentMode, code, signal });
           this.ffmpegProcess = null;
           resolved = true;
           resolve();

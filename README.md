@@ -487,6 +487,7 @@ Notes:
 |----------|-------------|---------|
 | `MAX_CONCURRENT_JOBS` | Maximum number of simultaneous bot sessions | `3` |
 | `MAX_RECORDING_DURATION_MINUTES` | Maximum recording duration in minutes | `180` |
+| `RECORD_AUDIO_ONLY` | Record audio-only WebM to reduce CPU load. Only explicit `false` disables it | `true` |
 | `MEETING_INACTIVITY_MINUTES` | Continuous inactivity duration after which the bot will end meeting recording | `1` |
 | `INACTIVITY_DETECTION_START_DELAY_MINUTES` | Initial grace period at the start of recording before inactivity detection begins | `1` |
 | `PORT` | Server port | `3000` |

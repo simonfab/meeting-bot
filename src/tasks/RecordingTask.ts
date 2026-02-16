@@ -31,8 +31,8 @@ export class RecordingTask extends Task<null, void> {
 
   protected async execute(): Promise<void> {
     await this.page.evaluate(
-      async ({ teamId, duration, inactivityLimit, userId, slightlySecretId, activateInactivityDetectionAfter, activateInactivityDetectionAfterMinutes, primaryMimeType, secondaryMimeType }:
-        { teamId: string, duration: number, inactivityLimit: number, userId: string, slightlySecretId: string, activateInactivityDetectionAfter: string, activateInactivityDetectionAfterMinutes: number, primaryMimeType: string, secondaryMimeType: string }) => {
+      async ({ teamId, duration, inactivityLimit, userId, slightlySecretId, activateInactivityDetectionAfter, activateInactivityDetectionAfterMinutes, primaryMimeType, secondaryMimeType, recordAudioOnly }:
+        { teamId: string, duration: number, inactivityLimit: number, userId: string, slightlySecretId: string, activateInactivityDetectionAfter: string, activateInactivityDetectionAfterMinutes: number, primaryMimeType: string, secondaryMimeType: string, recordAudioOnly: boolean }) => {
         let timeoutId: NodeJS.Timeout;
         let inactivityDetectionTimeout: NodeJS.Timeout;
 
@@ -75,17 +75,66 @@ export class RecordingTask extends Task<null, void> {
             preferCurrentTab: true,
           });
 
-          let options: MediaRecorderOptions = {};
-          if (MediaRecorder.isTypeSupported(primaryMimeType)) {
-            console.log(`Media Recorder will use ${primaryMimeType} codecs...`);
-            options = { mimeType: primaryMimeType };
-          }
-          else {
-            console.warn(`Media Recorder did not find primary mime type codecs ${primaryMimeType}, Using fallback codecs ${secondaryMimeType}`);
-            options = { mimeType: secondaryMimeType };
+          const audioTracks = stream.getAudioTracks();
+          const videoTracks = stream.getVideoTracks();
+          const hasAudioTracks = audioTracks.length > 0;
+          console.log(`Captured stream tracks - audio: ${audioTracks.length}, video: ${videoTracks.length}`);
+
+          const audioOnlyPrimaryMimeType = 'audio/webm;codecs=opus';
+          const audioOnlySecondaryMimeType = 'audio/webm';
+          let recordingStream: MediaStream = stream;
+          let selectedPrimaryMimeType = primaryMimeType;
+          let selectedSecondaryMimeType = secondaryMimeType;
+          let usingAudioOnly = false;
+
+          if (recordAudioOnly) {
+            if (!hasAudioTracks) {
+              console.warn('RECORD_AUDIO_ONLY requested but no audio tracks were captured. Falling back to AV recording mode.');
+            } else {
+              recordingStream = new MediaStream(audioTracks);
+              selectedPrimaryMimeType = audioOnlyPrimaryMimeType;
+              selectedSecondaryMimeType = audioOnlySecondaryMimeType;
+              usingAudioOnly = true;
+              videoTracks.forEach((track) => track.stop());
+              console.log('Audio-only recording mode enabled; video tracks detached from recorder stream.');
+            }
+          } else {
+            console.log('Audio+video recording mode enabled (RECORD_AUDIO_ONLY=false).');
           }
 
-          const mediaRecorder = new MediaRecorder(stream, { ...options });
+          const resolveRecorderOptions = (primary: string, fallback: string): MediaRecorderOptions => {
+            if (MediaRecorder.isTypeSupported(primary)) {
+              console.log(`Media Recorder will use ${primary} codecs...`);
+              return { mimeType: primary };
+            }
+            if (MediaRecorder.isTypeSupported(fallback)) {
+              console.warn(`Media Recorder did not find primary mime type codecs ${primary}, using fallback codecs ${fallback}`);
+              return { mimeType: fallback };
+            }
+            console.warn(`Neither preferred mime type (${primary}) nor fallback (${fallback}) is explicitly supported. Letting browser choose defaults.`);
+            return {};
+          };
+
+          let options: MediaRecorderOptions = {};
+          options = resolveRecorderOptions(selectedPrimaryMimeType, selectedSecondaryMimeType);
+
+          let mediaRecorder: MediaRecorder;
+          try {
+            mediaRecorder = new MediaRecorder(recordingStream, { ...options });
+          } catch (error) {
+            if (usingAudioOnly) {
+              console.warn('Audio-only MediaRecorder initialization failed; falling back to AV recorder stream.', error);
+              recordingStream = stream;
+              selectedPrimaryMimeType = primaryMimeType;
+              selectedSecondaryMimeType = secondaryMimeType;
+              options = resolveRecorderOptions(selectedPrimaryMimeType, selectedSecondaryMimeType);
+              mediaRecorder = new MediaRecorder(recordingStream, { ...options });
+              usingAudioOnly = false;
+            } else {
+              throw error;
+            }
+          }
+          console.log(`Recorder mode active: ${usingAudioOnly ? 'audio-only' : 'audio+video'}`);
 
           mediaRecorder.ondataavailable = async (event: BlobEvent) => {
             if (!event.data.size) {
@@ -107,7 +156,10 @@ export class RecordingTask extends Task<null, void> {
           const stopTheRecording = async () => {
             console.log('-------- TRIGGER stop the recording');
             mediaRecorder.stop();
-            stream.getTracks().forEach((track) => track.stop());
+            const tracksToStop = new Map<string, MediaStreamTrack>();
+            stream.getTracks().forEach((track) => tracksToStop.set(track.id, track));
+            recordingStream.getTracks().forEach((track) => tracksToStop.set(track.id, track));
+            tracksToStop.forEach((track) => track.stop());
 
             // Cleanup recording timer
             clearTimeout(timeoutId);
@@ -268,7 +320,8 @@ export class RecordingTask extends Task<null, void> {
         activateInactivityDetectionAfterMinutes: config.activateInactivityDetectionAfter,
         activateInactivityDetectionAfter: new Date(new Date().getTime() + config.activateInactivityDetectionAfter * 60 * 1000).toISOString(),
         primaryMimeType: webmMimeType,
-        secondaryMimeType: vp9MimeType
+        secondaryMimeType: vp9MimeType,
+        recordAudioOnly: config.recordAudioOnly
       }
     );
   }
