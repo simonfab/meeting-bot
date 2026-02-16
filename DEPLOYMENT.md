@@ -34,6 +34,17 @@ The workflow is defined in `.github/workflows/docker-build.yml` and includes:
 - **Optimized**: Only production dependencies
 - **Health check**: Built-in health monitoring
 
+### Playwright Layer Caching (ECR Push Optimization)
+
+- The production Dockerfile installs Playwright in an early layer before `COPY . .`.
+- This layer ordering is intentional: minor source-only edits should not rebuild browser binaries.
+- Baseline before optimization:
+  - A late `RUN npx playwright install` step after source copy took about 90 seconds.
+  - It produced a large layer (about 362MB compressed) that had to be uploaded to ECR on minor changes.
+- Expected behavior after optimization:
+  - No late Playwright install runs near the end of the build.
+  - Minor source-only changes should not trigger re-upload of the large browser layer.
+
 ### Development Image (`Dockerfile`)
 
 - **Base**: Node.js 20

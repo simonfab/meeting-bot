@@ -63,7 +63,7 @@ COPY package*.json ./
 # Install all dependencies (including dev dependencies for build)
 RUN npm ci && npm cache clean --force
 
-# Install Playwright and its dependencies
+# Install Playwright browser/deps before source copy so code-only changes keep this heavy layer cached
 RUN npx playwright install --with-deps
 
 # Copy source code
@@ -96,9 +96,6 @@ RUN mkdir -p /home/nodejs/.config/pulse \
 
 # Switch to non-root user
 USER nodejs
-
-# Install Playwright and its dependencies
-RUN npx playwright install
 
 # Expose the port your app runs on
 EXPOSE 3000
