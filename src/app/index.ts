@@ -19,11 +19,19 @@ let isbusy = 0;
 let gracefulShutdown = 0;
 
 app.get('/isbusy', async (req, res) => {
+  const activeJobs = globalJobStore.getActiveJobs();
   return res.status(200).json({
     success: true,
     data: globalJobStore.isFull() ? 1 : 0,  // backwards compatible
-    activeJobs: globalJobStore.getActiveCount(),
+    activeJobs: activeJobs.length,
     maxConcurrent: globalJobStore.getMaxConcurrent(),
+    jobs: activeJobs.map(j => ({
+      jobId: j.jobId,
+      meetingId: j.metadata?.meeting_id,
+      tenantId: j.metadata?.tenant_id,
+      platform: j.metadata?.platform,
+      startedAt: j.startedAt,
+    })),
   });
 });
 
@@ -91,6 +99,27 @@ app.post('/cancel/:jobId', async (req, res) => {
       error: `Job ${jobId} not found or already completed`,
     });
   }
+});
+
+app.post('/shutdown', async (req, res) => {
+  // Cancel all active jobs first, then exit.
+  // Docker restart policy (or ECS desired count) will bring the container back.
+  const activeJobs = globalJobStore.getActiveJobs();
+  const cancelled: string[] = [];
+
+  for (const job of activeJobs) {
+    const ok = await globalJobStore.cancelJob(job.jobId);
+    if (ok) cancelled.push(job.jobId);
+  }
+
+  res.status(200).json({
+    success: true,
+    message: `Shutting down. Cancelled ${cancelled.length} active job(s).`,
+    cancelled,
+  });
+
+  // Give response time to flush, then exit
+  setTimeout(() => process.exit(0), 500);
 });
 
 app.use('/google', googleRouter);
