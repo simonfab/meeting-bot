@@ -30,7 +30,7 @@ export class FFmpegRecorder {
 
       // Video input from X11 display (with Y offset to skip address bar)
       '-f', 'x11grab',
-      '-video_size', '1280x720',
+      '-video_size', '960x540',
       '-framerate', '25',
       '-draw_mouse', '0',
       '-i', `${process.env.DISPLAY || ':99'}+0,80`,

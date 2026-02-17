@@ -66,7 +66,7 @@ async function launchBrowserWithTimeout(launchFn: () => Promise<Browser>, timeou
 }
 
 async function createBrowserContext(url: string, correlationId: string, botType: BotType = 'google'): Promise<Page> {
-  const size = { width: 1280, height: 720 };
+  const size = { width: 960, height: 540 };
 
   // Base browser args used by all bots
   const baseBrowserArgs: string[] = [

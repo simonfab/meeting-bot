@@ -20,7 +20,7 @@ let shutdownInProgress = false;
 
 const initiateGracefulShutdown = async () => {
   if (shutdownInProgress) {
-    console.log('Shutdown already in progress, ignoring signal');
+    console.log('Shutdown already in progress.. ignoring signal');
     return;
   }
 
