@@ -11,6 +11,10 @@ chromium.use(stealthPlugin);
 
 export type BotType = 'microsoft' | 'google' | 'zoom';
 
+// Quick switch for Chromium CPU tuning in container/Xvfb runs.
+// Set this to false to revert to the previous launch profile without low-render flags.
+const LOW_RENDER_PROFILE_ENABLED = true;
+
 function attachBrowserErrorHandlers(browser: Browser, context: BrowserContext, page: Page, correlationId: string) {
   const log = getCorrelationIdLog(correlationId);
 
@@ -75,14 +79,26 @@ async function createBrowserContext(url: string, correlationId: string, botType:
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-web-security',
-    '--use-gl=angle',
-    '--use-angle=swiftshader',
     `--window-size=${size.width},${size.height}`,
     '--auto-accept-this-tab-capture',
     '--enable-features=MediaRecorder',
     '--enable-audio-service-out-of-process',
     '--autoplay-policy=no-user-gesture-required',
   ];
+
+  // Low-render profile to reduce CPU used by Chromium compositing/drawing in Xvfb.
+  // Toggle via LOW_RENDER_PROFILE_ENABLED above.
+  const lowRenderArgs: string[] = LOW_RENDER_PROFILE_ENABLED
+    ? [
+      '--disable-gpu',
+      '--disable-gpu-compositing',
+      '--disable-gl-drawing-for-tests',
+      '--disable-accelerated-2d-canvas',
+      '--disable-accelerated-video-decode',
+      '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows',
+    ]
+    : [];
 
   // Fake device args - only for Microsoft Teams
   // Teams needs fake devices to interact with pre-join screen toggles,
@@ -97,8 +113,8 @@ async function createBrowserContext(url: string, correlationId: string, botType:
   // - Google Meet: clicks "Continue without microphone and camera"
   // - Zoom: expects "Cannot detect your camera/microphone" notifications
   const browserArgs = botType === 'microsoft'
-    ? [...baseBrowserArgs, ...fakeDeviceArgs]
-    : baseBrowserArgs;
+    ? [...baseBrowserArgs, ...lowRenderArgs, ...fakeDeviceArgs]
+    : [...baseBrowserArgs, ...lowRenderArgs];
 
   // Teams-specific display args: kiosk mode prevents address bar from showing in ffmpeg recording
   // Google Meet and Zoom don't need this since they use tab capture (getDisplayMedia)
@@ -106,7 +122,9 @@ async function createBrowserContext(url: string, correlationId: string, botType:
     ? ['--kiosk', '--start-maximized']
     : [];
 
-  console.log(`${getCorrelationIdLog(correlationId)} Launching browser for ${botType} bot (fake devices: ${botType === 'microsoft'})`);
+  console.log(
+    `${getCorrelationIdLog(correlationId)} Launching browser for ${botType} bot (fake devices: ${botType === 'microsoft'}, low-render profile: ${LOW_RENDER_PROFILE_ENABLED})`
+  );
 
   const browser = await launchBrowserWithTimeout(
     async () => await chromium.launch({
