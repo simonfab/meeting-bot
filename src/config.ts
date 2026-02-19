@@ -27,6 +27,37 @@ const isAudioOnlyRecordingEnabled = (() => {
   return true;
 })();
 
+const isEcsTaskProtectionEnabled = (() => {
+  const raw = process.env.ECS_TASK_PROTECTION_ENABLED;
+  if (typeof raw === 'string' && raw.trim().toLowerCase() === 'false') {
+    return false;
+  }
+  return true;
+})();
+
+const parsePositiveInteger = (raw: string | undefined, defaultValue: number): number => {
+  if (!raw) return defaultValue;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
+  return Math.floor(parsed);
+};
+
+const maxConcurrentJobs = parsePositiveInteger(process.env.MAX_CONCURRENT_JOBS, 1);
+if (maxConcurrentJobs > 1) {
+  console.warn(
+    'MAX_CONCURRENT_JOBS > 1 is not supported in single-meeting ECS protection mode.'
+  );
+}
+
+const ecsTaskProtectionExpiresInMinutes = parsePositiveInteger(
+  process.env.ECS_TASK_PROTECTION_EXPIRES_IN_MINUTES,
+  240
+);
+const ecsTaskProtectionTimeoutMs = parsePositiveInteger(
+  process.env.ECS_TASK_PROTECTION_TIMEOUT_MS,
+  2000
+);
+
 console.log(
   'RECORD_AUDIO_ONLY',
   process.env.RECORD_AUDIO_ONLY ?? '(unset)',
@@ -82,6 +113,10 @@ export default {
   // Audio-only recording is enabled by default.
   // Set RECORD_AUDIO_ONLY=false to revert to legacy audio+video capture.
   recordAudioOnly: isAudioOnlyRecordingEnabled,
+  // ECS task protection uses the local ECS agent endpoint from ECS_AGENT_URI.
+  ecsTaskProtectionEnabled: isEcsTaskProtectionEnabled,
+  ecsTaskProtectionExpiresInMinutes: ecsTaskProtectionExpiresInMinutes,
+  ecsTaskProtectionTimeoutMs: ecsTaskProtectionTimeoutMs,
   miscStorageBucket: process.env.GCP_MISC_BUCKET,
   miscStorageFolder: process.env.GCP_MISC_BUCKET_FOLDER ? process.env.GCP_MISC_BUCKET_FOLDER : 'meeting-bot',
   region: process.env.GCP_DEFAULT_REGION,
@@ -125,5 +160,5 @@ export default {
     uploadConcurrency: process.env.AZURE_UPLOAD_CONCURRENCY ? Number(process.env.AZURE_UPLOAD_CONCURRENCY) : 4,
   },
   uploaderType: process.env.UPLOADER_TYPE ? (process.env.UPLOADER_TYPE as UploaderType) : 's3' as UploaderType,
-  maxConcurrentJobs: process.env.MAX_CONCURRENT_JOBS ? Number(process.env.MAX_CONCURRENT_JOBS) : 3,
+  maxConcurrentJobs,
 };

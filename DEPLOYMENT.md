@@ -105,7 +105,10 @@ Required environment variables:
 - `GCP_MISC_BUCKET`: Your Google Cloud Storage bucket
 
 Optional environment variables:
-- `MAX_CONCURRENT_JOBS`: Number of simultaneous bot sessions (default: 3)
+- `MAX_CONCURRENT_JOBS`: Number of simultaneous bot sessions (default: 1; set to `1` for ECS task protection mode)
+- `ECS_TASK_PROTECTION_ENABLED`: Enable ECS task scale-in protection endpoint updates (default: true)
+- `ECS_TASK_PROTECTION_EXPIRES_IN_MINUTES`: Safety expiry for task protection (default: 240)
+- `ECS_TASK_PROTECTION_TIMEOUT_MS`: Timeout for ECS agent endpoint calls in milliseconds (default: 2000)
 - `MAX_RECORDING_DURATION_MINUTES`: Maximum recording duration (default: 180)
 - `RECORD_AUDIO_ONLY`: Audio-only recording mode (default: true; only explicit `false` disables)
 - `PORT`: Server port (default: 3000)
@@ -122,7 +125,10 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      - MAX_CONCURRENT_JOBS=3
+      - MAX_CONCURRENT_JOBS=1
+      - ECS_TASK_PROTECTION_ENABLED=true
+      - ECS_TASK_PROTECTION_EXPIRES_IN_MINUTES=240
+      - ECS_TASK_PROTECTION_TIMEOUT_MS=2000
       - RECORD_AUDIO_ONLY=true
       - GCP_DEFAULT_REGION=us-central1
       - GCP_MISC_BUCKET=your-meeting-recordings
@@ -242,9 +248,9 @@ Use the provided script to test the production build locally:
 
 ### Resource Requirements
 
-Resource needs scale with the number of concurrent bot sessions (`MAX_CONCURRENT_JOBS`, default: 3). Each Playwright instance consumes its own memory and CPU.
+Resource needs scale with the number of concurrent bot sessions (`MAX_CONCURRENT_JOBS`, default: 1 for ECS task protection mode). Each Playwright instance consumes its own memory and CPU.
 
-- **Memory**: Minimum 2GB RAM per concurrent bot (e.g. 6GB+ for 3 concurrent sessions)
+- **Memory**: Minimum 2GB RAM per concurrent bot (e.g. 2GB+ for a single session)
 - **CPU**: 2+ cores per concurrent bot for optimal performance
 - **Storage**: 10GB+ for recordings and temporary files
 - **Network**: Stable internet connection for meeting platforms

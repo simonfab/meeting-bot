@@ -15,6 +15,7 @@ import { uploadDebugImage } from '../services/bugService';
 import { Logger } from 'winston';
 import { handleWaitingAtLobbyError } from './MeetBotBase';
 import { ZOOM_REQUEST_DENIED } from '../constants';
+import { setTaskProtection } from '../services/ecsTaskProtectionService';
 
 class BotBase extends AbstractMeetBot {
   protected page: Page;
@@ -66,6 +67,8 @@ export class ZoomBot extends BotBase {
       }
 
       throw error;
+    } finally {
+      await setTaskProtection(false);
     }
   }
 
@@ -299,6 +302,7 @@ export class ZoomBot extends BotBase {
     }
 
     pushState('joined');
+    await setTaskProtection(true);
     if (metadata?.meeting_id && metadata?.tenantId) {
       notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'joining', this._logger);
     }

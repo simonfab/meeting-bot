@@ -11,7 +11,7 @@ An open-source automation bot for joining and recording video meetings across mu
 
 - **Multi-Platform Support**: Join meetings on Google Meet, Microsoft Teams, and Zoom
 - **Automated Recording**: Capture meeting recordings with configurable duration limits
-- **Concurrent Bot Sessions**: Run multiple meetings simultaneously with configurable concurrency (default: 3 concurrent bots via `MAX_CONCURRENT_JOBS`)
+- **Single Active Bot Session**: Optimized for one meeting per task with `MAX_CONCURRENT_JOBS=1` for ECS task protection safety
 - **Dual Integration Options**: RESTful API endpoints and Redis message queue for flexible integration
 - **Asynchronous Processing**: Redis queue support for high-throughput, scalable meeting requests
 - **Docker Support**: Containerized deployment with Docker and Docker Compose
@@ -63,10 +63,10 @@ The server will start on `http://localhost:3000`
 
 ### How Meeting Bot Works
 
-Meeting Bot supports concurrent bot sessions, allowing multiple meetings to be recorded simultaneously:
+Meeting Bot is designed to run one meeting per task:
 
-- **Concurrent Processing**: Meeting Bot can run multiple Playwright instances in parallel, each joining a separate meeting. The number of concurrent slots is controlled by `MAX_CONCURRENT_JOBS` (default: 3)
-- **Capacity Management**: When all slots are in use, new requests receive a 409 response with capacity details. Once a slot frees up, new meetings are accepted automatically
+- **Single-Meeting Processing**: Set `MAX_CONCURRENT_JOBS=1` so each task handles one meeting lifecycle at a time
+- **Capacity Management**: When the single slot is in use, new requests receive a 409 response with capacity details
 - **Automatic Retry**: The bot automatically retries on certain errors such as automation failures or when it takes too long to admit the bot into a meeting
 
 ### API Endpoints
@@ -194,8 +194,8 @@ Response:
 {
   "success": true,
   "data": 1,
-  "activeJobs": 3,
-  "maxConcurrent": 3
+  "activeJobs": 1,
+  "maxConcurrent": 1
 }
 ```
 
@@ -214,7 +214,7 @@ Response:
     { "jobId": "abc-123", "startedAt": "2025-09-08T12:00:00Z", "metadata": { ... } }
   ],
   "activeCount": 1,
-  "maxConcurrent": 3
+  "maxConcurrent": 1
 }
 ```
 
@@ -243,9 +243,9 @@ GET /metrics
 ```json
 {
   "success": false,
-  "error": "All 3 bot slots are in use (3/3 active). Please try again shortly.",
-  "activeJobs": 3,
-  "maxConcurrent": 3,
+  "error": "All 1 bot slots are in use (1/1 active). Please try again shortly.",
+  "activeJobs": 1,
+  "maxConcurrent": 1,
   "data": { "userId": "user123", "teamId": "team123", "eventId": "...", "botId": "..." }
 }
 ```
@@ -340,7 +340,7 @@ r.rpush('jobs:meetbot:list', json.dumps(message))
 - **FIFO Queue**: Messages are processed in First-In-First-Out order
 - **BLPOP Processing**: The bot uses `BLPOP` to consume messages from the queue
 - **Automatic Processing**: Messages are automatically picked up and processed by the Redis consumer service
-- **Concurrent Processing**: Multiple meetings can be processed simultaneously, up to the configured `MAX_CONCURRENT_JOBS` limit
+- **Single-Meeting Processing**: For ECS protection mode, run one meeting per task with `MAX_CONCURRENT_JOBS=1`
 
 #### Redis Configuration
 
@@ -485,7 +485,10 @@ Notes:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MAX_CONCURRENT_JOBS` | Maximum number of simultaneous bot sessions | `3` |
+| `MAX_CONCURRENT_JOBS` | Maximum number of simultaneous bot sessions (single-meeting mode expects `1`) | `1` |
+| `ECS_TASK_PROTECTION_ENABLED` | Enable ECS task scale-in protection endpoint updates | `true` |
+| `ECS_TASK_PROTECTION_EXPIRES_IN_MINUTES` | Safety expiry for protection when enabled | `240` |
+| `ECS_TASK_PROTECTION_TIMEOUT_MS` | HTTP timeout for ECS agent endpoint calls | `2000` |
 | `MAX_RECORDING_DURATION_MINUTES` | Maximum recording duration in minutes | `180` |
 | `RECORD_AUDIO_ONLY` | Record audio-only WebM to reduce CPU load. Only explicit `false` disables it | `true` |
 | `MEETING_INACTIVITY_MINUTES` | Continuous inactivity duration after which the bot will end meeting recording | `1` |
@@ -562,7 +565,7 @@ src/
 ### Key Components
 
 - **AbstractMeetBot**: Base class for all platform bots
-- **JobStore**: Manages concurrent bot sessions via a Map-based store with configurable slot limits
+- **JobStore**: Manages active bot sessions via a Map-based store (single-session mode by default)
 - **RecordingTask**: Handles meeting recording functionality
 - **ContextBridgeTask**: Manages browser context and automation
 - **RedisMessageBroker**: Handles Redis queue operations (RPUSH/BLPOP)
@@ -618,7 +621,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ Microsoft Teams support  
 - ✅ Zoom support
 - ✅ Recording functionality
-- ✅ Concurrent bot sessions (configurable via `MAX_CONCURRENT_JOBS`)
+- ✅ Single active bot session (`MAX_CONCURRENT_JOBS=1` recommended for ECS protection)
 - ✅ Docker deployment
 - ✅ REST API support
 - ✅ Redis message queue support

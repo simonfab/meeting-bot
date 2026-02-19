@@ -19,6 +19,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { setTaskProtection } from '../services/ecsTaskProtectionService';
 
 const execAsync = promisify(exec);
 
@@ -79,6 +80,8 @@ export class MicrosoftTeamsBot extends MeetBotBase {
         await handleWaitingAtLobbyError({ token: bearerToken, botId, eventId, provider: 'microsoft', error }, this._logger);
 
       throw error;
+    } finally {
+      await setTaskProtection(false);
     }
   }
 
@@ -219,6 +222,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     }
 
     pushState('joined');
+    await setTaskProtection(true);
     if (metadata?.meeting_id && metadata?.tenantId) {
       notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'joining', this._logger);
     }

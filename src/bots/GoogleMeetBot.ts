@@ -16,6 +16,7 @@ import { GOOGLE_LOBBY_MODE_HOST_TEXT, GOOGLE_REQUEST_DENIED, GOOGLE_REQUEST_TIME
 import { vp9MimeType, webmMimeType } from '../lib/recording';
 import { notifyMafStatus } from '../services/notificationService';
 import { globalJobStore } from '../lib/globalJobStore';
+import { setTaskProtection } from '../services/ecsTaskProtectionService';
 
 export class GoogleMeetBot extends MeetBotBase {
   private _logger: Logger;
@@ -64,6 +65,8 @@ export class GoogleMeetBot extends MeetBotBase {
       }
 
       throw error;
+    } finally {
+      await setTaskProtection(false);
     }
   }
 
@@ -375,6 +378,7 @@ export class GoogleMeetBot extends MeetBotBase {
     }
 
     pushState('joined');
+    await setTaskProtection(true);
     if (metadata?.meeting_id && metadata?.tenantId) {
       notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'joining', this._logger);
     }
