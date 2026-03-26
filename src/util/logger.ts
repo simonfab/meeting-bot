@@ -3,6 +3,43 @@ import { createLogger, format, transports, Logger } from 'winston';
 import { v5 as uuidv5, v4 } from 'uuid';
 
 const NAMESPACE = uuidv5.DNS; 
+const REDACTED_QUERY_PARAMS = new Set([
+  'pwd',
+  'token',
+  'sig',
+  'signature',
+  'auth',
+  'apikey',
+  'key',
+  'code',
+  '_x_zm_rtaid',
+  '_x_zm_rhtaid',
+  'wpk',
+]);
+
+export const sanitizeUrlForLogs = (rawUrl?: string | null): string | undefined => {
+  if (!rawUrl) return undefined;
+
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.username = '';
+    parsed.password = '';
+
+    const keys = Array.from(parsed.searchParams.keys());
+    for (const key of keys) {
+      if (REDACTED_QUERY_PARAMS.has(key.toLowerCase())) {
+        parsed.searchParams.set(key, 'REDACTED');
+      }
+    }
+
+    return parsed.toString();
+  } catch {
+    return rawUrl.replace(
+      /([?&](pwd|token|sig|signature|auth|apikey|key|code|_x_zm_rtaid|_x_zm_rhtaid|wpk)=)[^&]+/ig,
+      '$1REDACTED'
+    );
+  }
+};
 
 export function loggerFactory(correlationId: string, botType?: string): Logger {
   return createLogger({
@@ -73,7 +110,7 @@ export const createCorrelationId = ({
       userId,
       eventId,
       botId,
-      url,
+      url: sanitizeUrlForLogs(url),
       teamId,
       method: 'v5'
     });
@@ -86,7 +123,7 @@ export const createCorrelationId = ({
       userId,
       eventId,
       botId,
-      url,
+      url: sanitizeUrlForLogs(url),
       teamId,
       method: 'v4'
     });
@@ -104,6 +141,9 @@ export const getErrorType = (error: unknown): string => {
     }
     if (error.constructor.name === 'WaitingAtLobbyRetryError') {
       return 'WaitingAtLobbyRetryError';
+    }
+    if (error.constructor.name === 'MeetingEndedError') {
+      return 'MeetingEndedError';
     }
     if (error.constructor.name === 'UnsupportedMeetingError') {
       return 'UnsupportedMeetingError';

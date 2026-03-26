@@ -27,6 +27,15 @@ export class WaitingAtLobbyRetryError extends KnownError {
   }
 }
 
+export class MeetingEndedError extends KnownError {
+  public documentBodyText: string | undefined | null;
+
+  constructor(message: string, documentBodyText?: string, retryable?: boolean, maxRetries?: number) {
+    super(message, retryable, maxRetries);
+    this.documentBodyText = documentBodyText;
+  }
+}
+
 export class MeetingTimeoutError extends Error {
   constructor(message: string) {
     super(message);

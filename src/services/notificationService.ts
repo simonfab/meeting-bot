@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { Logger } from 'winston';
 import config from '../config';
 import { createClient, RedisClientType } from 'redis';
+import { sanitizeUrlForLogs } from '../util/logger';
 
 export interface RecordingCompletedPayload {
   recordingId: string;
@@ -19,7 +20,10 @@ function signPayload(body: string, secret?: string): string | undefined {
 }
 
 async function sendWebhook(payload: RecordingCompletedPayload, logger: Logger) {
-  logger.info('sendWebhook called', { enabled: config.notifyWebhookEnabled, url: config.notifyWebhookUrl });
+  logger.info('sendWebhook called', {
+    enabled: config.notifyWebhookEnabled,
+    url: sanitizeUrlForLogs(config.notifyWebhookUrl),
+  });
   if (!config.notifyWebhookEnabled) {
     logger.info('Webhook is disabled, skipping.');
     return;
@@ -32,7 +36,9 @@ async function sendWebhook(payload: RecordingCompletedPayload, logger: Logger) {
   const body = JSON.stringify(payload);
   const signature = signPayload(body, config.notifyWebhookSecret);
 
-  logger.info('Sending webhook to:', config.notifyWebhookUrl);
+  logger.info('Sending webhook to endpoint', {
+    url: sanitizeUrlForLogs(config.notifyWebhookUrl),
+  });
   try {
     const response = await axios.post(config.notifyWebhookUrl, body, {
       headers: {
@@ -46,7 +52,7 @@ async function sendWebhook(payload: RecordingCompletedPayload, logger: Logger) {
     logger.error('Failed to deliver recording webhook', {
       message: err?.message,
       code: err?.code,
-      url: config.notifyWebhookUrl
+      url: sanitizeUrlForLogs(config.notifyWebhookUrl)
     });
   }
 }

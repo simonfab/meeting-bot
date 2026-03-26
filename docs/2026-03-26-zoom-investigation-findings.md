@@ -274,6 +274,38 @@ Priority areas:
 
 ## Out of Scope for This Note
 
-This document does not propose detailed code changes. Those are captured in the companion plan document:
+Detailed sequencing and remaining work are captured in the companion plan document:
 
 - `docs/2026-03-26-zoom-hardening-plan.md`
+
+## Implementation Progress Update
+
+Date updated: 2026-03-26
+
+An initial hardening pass has now been applied in source.
+
+Implemented:
+
+- Zoom pre-join prompt dismissal in `src/bots/ZoomBot.ts`
+- joined-state fallback detection using visible meeting controls, not only footer parsing
+- richer Zoom join diagnostics for timeout cases
+- a specific `MeetingEndedError` path for ended-by-host-before-recording cases
+- URL redaction for correlation logging
+- webhook log redaction
+
+Files changed:
+
+- `src/bots/ZoomBot.ts`
+- `src/error.ts`
+- `src/util/logger.ts`
+- `src/services/notificationService.ts`
+
+Verification completed:
+
+- `npm run build` succeeded on 2026-03-26 after the changes
+
+Still pending:
+
+- live runtime validation of the patched Zoom bot against the observed Zoom variants
+- follow-on cleanup for ECS task protection warnings
+- follow-on cleanup for browser-log shutdown noise

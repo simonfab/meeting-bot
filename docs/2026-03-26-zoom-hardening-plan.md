@@ -34,6 +34,35 @@ The Zoom bot should:
 - produce actionable diagnostics when join still fails
 - stop logging full meeting secrets
 
+## Progress Update
+
+Date updated: 2026-03-26
+
+Completed in the first implementation pass:
+
+- Phase 1 core work
+  - Zoom pre-join prompt dismissal was added
+- Phase 2 partial work
+  - app vs iframe state is now captured more explicitly during join polling
+- Phase 3 core work
+  - joined-state detection now has control-based fallbacks in addition to footer parsing
+  - ended-by-host is no longer treated as a generic lobby timeout
+- Phase 4 partial work
+  - richer join diagnostics are now logged on failure
+- Phase 5 partial work
+  - meeting URLs and webhook logs are now redacted in the main identified logging paths
+
+Verified:
+
+- `npm run build`
+
+Not yet completed:
+
+- live post-change validation across the observed Zoom variants
+- regression coverage
+- ECS task protection cleanup
+- browser-log shutdown cleanup
+
 ## Phase 1: Pre-Join Hardening
 
 ### Goal
