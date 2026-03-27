@@ -1,13 +1,13 @@
 import { JoinParams } from './AbstractMeetBot';
 import { BotStatus, WaitPromise } from '../types';
 import config from '../config';
-import { UnsupportedMeetingError, WaitingAtLobbyRetryError } from '../error';
+import { MeetingEndedError, UnsupportedMeetingError, WaitingAtLobbyRetryError } from '../error';
 import { patchBotStatus } from '../services/botService';
 import { handleUnsupportedMeetingError, handleWaitingAtLobbyError, MeetBotBase } from './MeetBotBase';
 import { v4 } from 'uuid';
 import { IUploader } from '../middleware/disk-uploader';
 import { Logger } from 'winston';
-import { browserLogCaptureCallback } from '../util/logger';
+import { browserLogCaptureCallback, sanitizeUrlForLogs } from '../util/logger';
 import { getWaitingPromise } from '../lib/promise';
 import { retryActionWithWait } from '../util/resilience';
 import { uploadDebugImage } from '../services/bugService';
@@ -17,6 +17,20 @@ import { vp9MimeType, webmMimeType } from '../lib/recording';
 import { notifyMafStatus } from '../services/notificationService';
 import { globalJobStore } from '../lib/globalJobStore';
 import { setTaskProtection } from '../services/ecsTaskProtectionService';
+
+type GoogleMeetJoinSnapshot = {
+  joined: boolean;
+  joinedBy: 'people_count' | 'leave_call' | 'body_text' | null;
+  waitingOnHost: boolean;
+  requestTimedOut: boolean;
+  userDenied: boolean;
+  ended: boolean;
+  participantCount: number | null;
+  pageUrl: string;
+  bodyText: string;
+  dialogTexts: string[];
+  buttonLabels: string[];
+};
 
 export class GoogleMeetBot extends MeetBotBase {
   private _logger: Logger;
@@ -211,144 +225,76 @@ export class GoogleMeetBot extends MeetBotBase {
 
       let waitTimeout: NodeJS.Timeout;
       let waitInterval: NodeJS.Timeout;
+      let bestSnapshot: GoogleMeetJoinSnapshot | null = null;
 
-      const waitAtLobbyPromise = new Promise<boolean>((resolveWaiting) => {
+      const waitAtLobbyPromise = new Promise<GoogleMeetJoinSnapshot | null>((resolveWaiting) => {
         waitTimeout = setTimeout(() => {
           clearInterval(waitInterval);
-          resolveWaiting(false);
+          resolveWaiting(bestSnapshot);
         }, wanderingTime);
 
         waitInterval = setInterval(async () => {
           try {
-            const detectLobbyModeHostWaitingText = async (): Promise<'WAITING_FOR_HOST_TO_ADMIT_BOT' | 'WAITING_REQUEST_TIMEOUT' | 'LOBBY_MODE_NOT_ACTIVE' | 'UNABLE_TO_DETECT_LOBBY_MODE'> => {
-              try {
-                const lobbyModeHostWaitingText = await this.page.getByText(GOOGLE_LOBBY_MODE_HOST_TEXT);
-                if (await lobbyModeHostWaitingText.count() > 0 && await lobbyModeHostWaitingText.isVisible()) {
-                  return 'WAITING_FOR_HOST_TO_ADMIT_BOT';
-                }
-
-                const lobbyModeRequestTimeoutText = await this.page.getByText(GOOGLE_REQUEST_TIMEOUT);
-                if (await lobbyModeRequestTimeoutText.count() > 0 && await lobbyModeRequestTimeoutText.isVisible()) {
-                  return 'WAITING_REQUEST_TIMEOUT';
-                }
-
-                return 'LOBBY_MODE_NOT_ACTIVE';
-              }
-              catch (e) {
-                this._logger.error('Error detecting lobby mode host waiting text...', { error: e, message: e?.message });
-                return 'UNABLE_TO_DETECT_LOBBY_MODE';
-              }
-            };
-
-            let peopleElement;
-            let callButtonElement;
-            let botWasDeniedAccess = false;
-
-            try {
-              peopleElement = await this.page.waitForSelector('button[aria-label="People"]', { timeout: 500 });
-            } catch(e) {
-              // Element not found yet - this is expected while waiting
+            const snapshot = await this.captureJoinSnapshot();
+            if (this.isBetterJoinSnapshot(snapshot, bestSnapshot)) {
+              bestSnapshot = snapshot;
             }
 
-            try {
-              callButtonElement = await this.page.waitForSelector('button[aria-label="Leave call"]', { timeout: 500 });
-            } catch(e) {
-              // Element not found yet - this is expected while waiting
-            }
-
-            if (peopleElement || callButtonElement) {
-              // Here check the "lobby mode" that waits for the Host to join the meeting or for the Host to admit the bot
-              const lobbyModeHostWaitingText = await detectLobbyModeHostWaitingText();
-              if (lobbyModeHostWaitingText === 'WAITING_FOR_HOST_TO_ADMIT_BOT') {
-                this._logger.info('Lobbdy Mode: Google Meet Bot is waiting for the host to admit it...', { userId, teamId });
-              } else if (lobbyModeHostWaitingText === 'WAITING_REQUEST_TIMEOUT') {
-                this._logger.info('Lobby Mode: Google Meet Bot join request timed out...', { userId, teamId });
-                clearInterval(waitInterval);
-                clearTimeout(waitTimeout);
-                resolveWaiting(false);
-                return;
-              } else {
-                // Additional check: Verify we can actually see participants (not just UI buttons)
-                // The "Leave call" button can exist even in lobby waiting state
-                try {
-                  const participantCountDetected = await this.page.evaluate(() => {
-                    try {
-                      // Look for People button with participant count
-                      const peopleButton = document.querySelector('button[aria-label^="People"]');
-                      if (peopleButton) {
-                        const ariaLabel = peopleButton.getAttribute('aria-label');
-                        // Check if we can see participant count (e.g., "People - 2 joined")
-                        const match = ariaLabel?.match(/People.*?(\d+)/);
-                        if (match && parseInt(match[1]) >= 1) {
-                          return true;
-                        }
-                      }
-
-                      // Alternative: Check if participant count is visible in the DOM
-                      const allButtons = Array.from(document.querySelectorAll('button'));
-                      for (const btn of allButtons) {
-                        const label = btn.getAttribute('aria-label');
-                        if (label && /People.*?\d+/.test(label)) {
-                          return true;
-                        }
-                      }
-
-                      // Fallback: Check for text that indicates we're in the call
-                      const bodyText = document.body.innerText;
-                      if (bodyText.includes('You have joined the call') ||
-                          bodyText.includes('other person in the call') ||
-                          bodyText.includes('people in the call')) {
-                        return true;
-                      }
-
-                      // Fallback: Check for Leave call button which indicates we're in a call
-                      const leaveCallButton = document.querySelector('button[aria-label="Leave call"]');
-                      if (leaveCallButton) {
-                        // If we have Leave call button AND no lobby mode text, we're likely in the call
-                        const hasLobbyText = bodyText.includes('Asking to join') ||
-                                            bodyText.includes('You\'re the only one here');
-                        if (!hasLobbyText) {
-                          return true;
-                        }
-                      }
-
-                      return false;
-                    } catch (e) {
-                      return false;
-                    }
-                  });
-
-                  if (participantCountDetected) {
-                    this._logger.info('Google Meet Bot is entering the meeting...', { userId, teamId });
-                    clearInterval(waitInterval);
-                    clearTimeout(waitTimeout);
-                    resolveWaiting(true);
-                    return;
-                  } else {
-                    this._logger.info('People button found but participant count not visible yet - continuing to wait...', { userId, teamId });
-                    return;
-                  }
-                } catch (e) {
-                  this._logger.error('Error checking participant visibility', { error: e });
-                  return;
-                }
-              }              
-            }
-
-            try {
-              const deniedText = await this.page.getByText(GOOGLE_REQUEST_DENIED);
-              if (await deniedText.count() > 0 && await deniedText.isVisible()) {
-                botWasDeniedAccess = true;
-              }
-            }
-            catch(e) {
-              //do nothing
-            }
-            if (botWasDeniedAccess) {
-              this._logger.info('Google Meet Bot is denied access to the meeting...', { userId, teamId });
+            if (snapshot.joined) {
+              this._logger.info('Google Meet Bot is entering the meeting...', {
+                userId,
+                teamId,
+                joinedBy: snapshot.joinedBy,
+                participantCount: snapshot.participantCount,
+              });
               clearInterval(waitInterval);
               clearTimeout(waitTimeout);
-              resolveWaiting(false);
+              resolveWaiting(snapshot);
+              return;
+            }
+
+            if (snapshot.requestTimedOut) {
+              this._logger.info('Lobby Mode: Google Meet Bot join request timed out...', {
+                userId,
+                teamId,
+                pageUrl: snapshot.pageUrl,
+              });
+              clearInterval(waitInterval);
+              clearTimeout(waitTimeout);
+              resolveWaiting(snapshot);
+              return;
+            }
+
+            if (snapshot.userDenied) {
+              this._logger.info('Google Meet Bot is denied access to the meeting...', {
+                userId,
+                teamId,
+                pageUrl: snapshot.pageUrl,
+              });
+              clearInterval(waitInterval);
+              clearTimeout(waitTimeout);
+              resolveWaiting(snapshot);
+              return;
+            }
+
+            if (snapshot.ended) {
+              this._logger.info('Google Meet ended before the recording phase started...', {
+                userId,
+                teamId,
+                pageUrl: snapshot.pageUrl,
+              });
+              clearInterval(waitInterval);
+              clearTimeout(waitTimeout);
+              resolveWaiting(snapshot);
+              return;
+            }
+
+            if (snapshot.waitingOnHost) {
+              this._logger.info('Lobby Mode: Google Meet Bot is waiting for the host to admit it...', {
+                userId,
+                teamId,
+                pageUrl: snapshot.pageUrl,
+              });
             }
           } catch(e) {
             this._logger.error(
@@ -359,15 +305,41 @@ export class GoogleMeetBot extends MeetBotBase {
         }, 2000);  // Check every 2 seconds (was 20s - too slow, missing start of recording)
       });
 
-      const waitingAtLobbySuccess = await waitAtLobbyPromise;
-      if (!waitingAtLobbySuccess) {
-        const bodyText = await this.page.evaluate(() => document.body.innerText);
+      const joinSnapshot = await waitAtLobbyPromise;
+      if (!joinSnapshot?.joined) {
+        const bodyText = joinSnapshot?.bodyText ?? await this.page.evaluate(() => document.body.innerText);
+        const userDenied = joinSnapshot?.userDenied ?? (bodyText || '')?.includes(GOOGLE_REQUEST_DENIED);
 
-        const userDenied = (bodyText || '')?.includes(GOOGLE_REQUEST_DENIED);
+        if (config.miscStorageBucket) {
+          try {
+            await uploadDebugImage(
+              await this.page.screenshot({ type: 'png', fullPage: true }),
+              'google-join-timeout',
+              userId,
+              this._logger,
+              botId
+            );
+          } catch {
+            // Diagnostic screenshot upload is best-effort only.
+          }
+        }
 
-        this._logger.error('Cant finish wait at the lobby check', { userDenied, waitingAtLobbySuccess, bodyText });
+        this._logger.error('Cant finish wait at the lobby check', {
+          userDenied,
+          waitingAtLobbySuccess: false,
+          ...(joinSnapshot ? this.toJoinDiagnostics(joinSnapshot) : { pageUrl: sanitizeUrlForLogs(this.page.url()) }),
+          bodyText,
+        });
 
-        // Don't retry lobby errors - if user doesn't admit bot, retrying won't help
+        if (joinSnapshot?.ended) {
+          throw new MeetingEndedError(
+            'Google Meet ended before recording could start.',
+            bodyText ?? '',
+            false,
+            0
+          );
+        }
+
         throw new WaitingAtLobbyRetryError('Google Meet bot could not enter the meeting...', bodyText ?? '', false, 0);
       }
     } catch(lobbyError) {
@@ -489,6 +461,144 @@ export class GoogleMeetBot extends MeetBotBase {
     await this.recordMeetingPage({ teamId, eventId, userId, botId, uploader });
 
     pushState('finished');
+  }
+
+  private async captureJoinSnapshot(): Promise<GoogleMeetJoinSnapshot> {
+    const snapshot = await this.page.evaluate(({
+      lobbyText,
+      requestTimedOutText,
+    }: {
+      lobbyText: string;
+      requestTimedOutText: string;
+    }) => {
+      const normalizeText = (value: string | null | undefined): string =>
+        value ? value.replace(/\s+/g, ' ').trim() : '';
+
+      const buttonLabels = Array.from(document.querySelectorAll('button,[role="button"]'))
+        .map((el) => {
+          const node = el as HTMLElement;
+          return normalizeText(node.innerText || node.getAttribute('aria-label'));
+        })
+        .filter(Boolean);
+
+      const dialogTexts = Array.from(document.querySelectorAll('[role="dialog"],dialog'))
+        .map((el) => normalizeText((el as HTMLElement).innerText))
+        .filter(Boolean)
+        .slice(0, 10);
+
+      const bodyText = document.body?.innerText?.slice(0, 4000) ?? '';
+      const peopleLabels = Array.from(document.querySelectorAll('button[aria-label^="People"],button[aria-label*="People"]'))
+        .map((el) => normalizeText(el.getAttribute('aria-label') || (el as HTMLElement).innerText))
+        .filter(Boolean);
+
+      let participantCount: number | null = null;
+      for (const label of peopleLabels) {
+        const match = label.match(/People.*?(\d+)/i);
+        if (match) {
+          participantCount = parseInt(match[1], 10);
+          break;
+        }
+      }
+
+      const leaveCallVisible = document.querySelector('button[aria-label="Leave call"]') !== null;
+      const waitingOnHost =
+        bodyText.includes(lobbyText) ||
+        bodyText.includes('Asking to join');
+      const requestTimedOut = bodyText.includes(requestTimedOutText);
+
+      return {
+        bodyText,
+        dialogTexts,
+        buttonLabels: Array.from(new Set(buttonLabels)).slice(0, 40),
+        participantCount,
+        leaveCallVisible,
+        waitingOnHost,
+        requestTimedOut,
+      };
+    }, {
+      lobbyText: GOOGLE_LOBBY_MODE_HOST_TEXT,
+      requestTimedOutText: GOOGLE_REQUEST_TIMEOUT,
+    });
+
+    const bodyText = snapshot.bodyText;
+    const endedIndicators = [
+      'The meeting has ended',
+      'You left the meeting',
+      'This meeting has ended',
+      'Meeting ended',
+      'Return to home screen',
+      'The video call ended',
+      'Call ended',
+      'You\'ve been removed from the meeting',
+    ];
+    const ended = endedIndicators.some(indicator => bodyText.includes(indicator));
+    const userDenied = bodyText.includes(GOOGLE_REQUEST_DENIED);
+    const joinedByPeopleCount = snapshot.participantCount !== null && snapshot.participantCount >= 1;
+    const joinedByBodyText =
+      bodyText.includes('You have joined the call') ||
+      bodyText.includes('other person in the call') ||
+      bodyText.includes('people in the call');
+    const joinedByLeaveCall =
+      snapshot.leaveCallVisible &&
+      !snapshot.waitingOnHost &&
+      !bodyText.includes('You\'re the only one here');
+    const joined = !ended && !userDenied && !snapshot.requestTimedOut && (
+      joinedByPeopleCount ||
+      joinedByBodyText ||
+      joinedByLeaveCall
+    );
+
+    return {
+      joined,
+      joinedBy: joinedByPeopleCount ? 'people_count' : joinedByBodyText ? 'body_text' : joinedByLeaveCall ? 'leave_call' : null,
+      waitingOnHost: snapshot.waitingOnHost,
+      requestTimedOut: snapshot.requestTimedOut,
+      userDenied,
+      ended,
+      participantCount: snapshot.participantCount,
+      pageUrl: sanitizeUrlForLogs(this.page.url()) ?? this.page.url(),
+      bodyText,
+      dialogTexts: snapshot.dialogTexts,
+      buttonLabels: snapshot.buttonLabels,
+    };
+  }
+
+  private isBetterJoinSnapshot(
+    snapshot: GoogleMeetJoinSnapshot,
+    current: GoogleMeetJoinSnapshot | null
+  ): boolean {
+    if (!current) {
+      return true;
+    }
+
+    const score = (candidate: GoogleMeetJoinSnapshot): number => {
+      let result = 0;
+      if (candidate.joined) result += 100;
+      if (candidate.ended) result += 90;
+      if (candidate.userDenied) result += 80;
+      if (candidate.requestTimedOut) result += 70;
+      if (candidate.waitingOnHost) result += 10;
+      if (candidate.participantCount !== null) result += 5;
+      result += candidate.dialogTexts.length;
+      result += Math.min(candidate.buttonLabels.length, 20);
+      result += Math.min(candidate.bodyText.length, 4000) / 1000;
+      return result;
+    };
+
+    return score(snapshot) >= score(current);
+  }
+
+  private toJoinDiagnostics(snapshot: GoogleMeetJoinSnapshot): Record<string, unknown> {
+    return {
+      pageUrl: snapshot.pageUrl,
+      joinedBy: snapshot.joinedBy,
+      waitingOnHost: snapshot.waitingOnHost,
+      requestTimedOut: snapshot.requestTimedOut,
+      ended: snapshot.ended,
+      participantCount: snapshot.participantCount,
+      dialogTexts: snapshot.dialogTexts,
+      buttonLabels: snapshot.buttonLabels,
+    };
   }
 
   private async recordMeetingPage(

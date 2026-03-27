@@ -54,7 +54,7 @@ Completed in the first implementation pass:
 
 Verified:
 
-- `npm run build`
+- `npm run build` after the initial Zoom hardening work and again after the 2026-03-27 Google Meet and Microsoft Teams instrumentation extension
 
 Not yet completed:
 
@@ -62,6 +62,14 @@ Not yet completed:
 - regression coverage
 - ECS task protection cleanup
 - browser-log shutdown cleanup
+
+Cross-provider follow-on completed on 2026-03-27:
+
+- targeted join-path diagnostics were added to `GoogleMeetBot`
+- targeted join-path diagnostics were added to `MicrosoftTeamsBot`
+- both now capture structured failure evidence before throwing join/admission errors
+- both now use best-effort timeout screenshots when misc storage is configured
+- both now distinguish ended-before-recording from generic lobby timeout
 
 ## Phase 1: Pre-Join Hardening
 

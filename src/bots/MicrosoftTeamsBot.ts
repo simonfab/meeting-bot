@@ -1,7 +1,7 @@
 import { JoinParams } from './AbstractMeetBot';
 import { BotStatus } from '../types';
 import config from '../config';
-import { WaitingAtLobbyRetryError } from '../error';
+import { MeetingEndedError, WaitingAtLobbyRetryError } from '../error';
 import { handleWaitingAtLobbyError, MeetBotBase } from './MeetBotBase';
 import { v4 } from 'uuid';
 import { patchBotStatus } from '../services/botService';
@@ -12,7 +12,7 @@ import { Logger } from 'winston';
 import { retryActionWithWait } from '../util/resilience';
 import { uploadDebugImage } from '../services/bugService';
 import createBrowserContext from '../lib/chromium';
-import { browserLogCaptureCallback } from '../util/logger';
+import { browserLogCaptureCallback, sanitizeUrlForLogs } from '../util/logger';
 import { MICROSOFT_REQUEST_DENIED } from '../constants';
 import { FFmpegRecorder } from '../lib/ffmpegRecorder';
 import * as path from 'path';
@@ -22,6 +22,18 @@ import { promisify } from 'util';
 import { setTaskProtection } from '../services/ecsTaskProtectionService';
 
 const execAsync = promisify(exec);
+
+type TeamsJoinSnapshot = {
+  joined: boolean;
+  joinedBy: 'controls' | 'leave_button' | null;
+  userDenied: boolean;
+  ended: boolean;
+  waitingToBeAdmitted: boolean;
+  pageUrl: string;
+  bodyText: string;
+  dialogTexts: string[];
+  buttonLabels: string[];
+};
 
 export class MicrosoftTeamsBot extends MeetBotBase {
   private _logger: Logger;
@@ -204,21 +216,93 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     // Wait for admission to meeting (lobby wait)
     try {
       const wanderingTime = config.joinWaitTime * 60 * 1000;
-      const callButton = this.page.getByRole('button', { name: /Leave/i });
-      await callButton.waitFor({ timeout: wanderingTime });
-      this._logger.info('Bot is entering the meeting...');
+      let waitTimeout: NodeJS.Timeout;
+      let waitInterval: NodeJS.Timeout;
+      let bestSnapshot: TeamsJoinSnapshot | null = null;
+
+      const waitAtLobbyPromise = new Promise<TeamsJoinSnapshot | null>((resolveWaiting) => {
+        waitTimeout = setTimeout(() => {
+          clearInterval(waitInterval);
+          resolveWaiting(bestSnapshot);
+        }, wanderingTime);
+
+        waitInterval = setInterval(async () => {
+          try {
+            const snapshot = await this.captureJoinSnapshot();
+            if (this.isBetterJoinSnapshot(snapshot, bestSnapshot)) {
+              bestSnapshot = snapshot;
+            }
+
+            if (snapshot.joined) {
+              this._logger.info('Bot is entering the meeting...', {
+                joinedBy: snapshot.joinedBy,
+                pageUrl: snapshot.pageUrl,
+              });
+              clearInterval(waitInterval);
+              clearTimeout(waitTimeout);
+              resolveWaiting(snapshot);
+              return;
+            }
+
+            if (snapshot.userDenied || snapshot.ended) {
+              clearInterval(waitInterval);
+              clearTimeout(waitTimeout);
+              resolveWaiting(snapshot);
+              return;
+            }
+
+            if (snapshot.waitingToBeAdmitted) {
+              this._logger.info('Microsoft Teams bot is still waiting to be admitted...', {
+                pageUrl: snapshot.pageUrl,
+              });
+            }
+          } catch {
+            // Ignore transient UI polling errors and keep waiting
+          }
+        }, 2000);
+      });
+
+      const joinSnapshot = await waitAtLobbyPromise;
+      if (!joinSnapshot?.joined) {
+        const bodyText = joinSnapshot?.bodyText ?? await this.page.evaluate(() => document.body.innerText);
+        const userDenied = joinSnapshot?.userDenied ?? (bodyText || '')?.includes(MICROSOFT_REQUEST_DENIED);
+
+        if (config.miscStorageBucket) {
+          try {
+            await uploadDebugImage(
+              await this.page.screenshot({ type: 'png', fullPage: true }),
+              'teams-join-timeout',
+              userId,
+              this._logger,
+              botId
+            );
+          } catch {
+            // Diagnostic screenshot upload is best-effort only.
+          }
+        }
+
+        this._logger.error('Cant finish wait at the lobby check', {
+          userDenied,
+          waitingAtLobbySuccess: false,
+          ...(joinSnapshot ? this.toJoinDiagnostics(joinSnapshot) : { pageUrl: sanitizeUrlForLogs(this.page.url()) }),
+          bodyText,
+        });
+
+        if (joinSnapshot?.ended) {
+          throw new MeetingEndedError(
+            'Microsoft Teams meeting ended before recording could start.',
+            bodyText ?? '',
+            false,
+            0
+          );
+        }
+
+        throw new WaitingAtLobbyRetryError('Microsoft Teams Meeting bot could not enter the meeting...', bodyText ?? '', false, 0);
+      }
     } catch (error) {
-      const bodyText = await this.page.evaluate(() => document.body.innerText);
-
-      const userDenied = (bodyText || '')?.includes(MICROSOFT_REQUEST_DENIED);
-
-      this._logger.error('Cant finish wait at the lobby check', { userDenied, waitingAtLobbySuccess: false, bodyText });
-
       this._logger.error('Closing the browser on error...', error);
       await this.page.context().browser()?.close();
-
-      // Don't retry lobby errors - if user doesn't admit bot, retrying won't help
-      throw new WaitingAtLobbyRetryError('Microsoft Teams Meeting bot could not enter the meeting...', bodyText ?? '', false, 0);
+      throw error;
     }
 
     pushState('joined');
@@ -242,6 +326,96 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     await this.recordMeetingPageWithFFmpeg({ teamId, userId, eventId, botId, uploader });
 
     pushState('finished');
+  }
+
+  private async captureJoinSnapshot(): Promise<TeamsJoinSnapshot> {
+    const snapshot = await this.page.evaluate(() => {
+      const normalizeText = (value: string | null | undefined): string =>
+        value ? value.replace(/\s+/g, ' ').trim() : '';
+
+      const buttonLabels = Array.from(document.querySelectorAll('button,[role="button"]'))
+        .map((el) => {
+          const node = el as HTMLElement;
+          return normalizeText(node.innerText || node.getAttribute('aria-label') || node.getAttribute('title'));
+        })
+        .filter(Boolean);
+
+      const dialogTexts = Array.from(document.querySelectorAll('[role="dialog"],dialog'))
+        .map((el) => normalizeText((el as HTMLElement).innerText))
+        .filter(Boolean)
+        .slice(0, 10);
+
+      return {
+        bodyText: document.body?.innerText?.slice(0, 4000) ?? '',
+        dialogTexts,
+        buttonLabels: Array.from(new Set(buttonLabels)).slice(0, 40),
+      };
+    });
+
+    const bodyText = snapshot.bodyText;
+    const buttonLabels = snapshot.buttonLabels;
+    const leaveVisible = buttonLabels.some(label => /leave/i.test(label));
+    const inCallControlsVisible = buttonLabels.some(label =>
+      /chat|people|participants|camera|mic|microphone|mute|unmute|share|react|raise/i.test(label)
+    );
+    const waitingToBeAdmitted =
+      /let you in/i.test(bodyText) ||
+      /waiting for someone in the meeting/i.test(bodyText) ||
+      /we've let people in the meeting know/i.test(bodyText) ||
+      /someone in the meeting should let you in soon/i.test(bodyText);
+    const ended =
+      bodyText.includes('The meeting has ended') ||
+      bodyText.includes('You left the meeting') ||
+      bodyText.includes('Meeting has ended') ||
+      bodyText.includes('Call ended') ||
+      bodyText.includes('You were removed from the meeting');
+    const userDenied = bodyText.includes(MICROSOFT_REQUEST_DENIED);
+    const joinedByControls = leaveVisible && inCallControlsVisible;
+    const joinedByLeave = leaveVisible && !waitingToBeAdmitted;
+    const joined = !ended && !userDenied && (joinedByControls || joinedByLeave);
+
+    return {
+      joined,
+      joinedBy: joinedByControls ? 'controls' : joinedByLeave ? 'leave_button' : null,
+      userDenied,
+      ended,
+      waitingToBeAdmitted,
+      pageUrl: sanitizeUrlForLogs(this.page.url()) ?? this.page.url(),
+      bodyText,
+      dialogTexts: snapshot.dialogTexts,
+      buttonLabels,
+    };
+  }
+
+  private isBetterJoinSnapshot(snapshot: TeamsJoinSnapshot, current: TeamsJoinSnapshot | null): boolean {
+    if (!current) {
+      return true;
+    }
+
+    const score = (candidate: TeamsJoinSnapshot): number => {
+      let result = 0;
+      if (candidate.joined) result += 100;
+      if (candidate.ended) result += 90;
+      if (candidate.userDenied) result += 80;
+      if (candidate.waitingToBeAdmitted) result += 10;
+      result += candidate.dialogTexts.length;
+      result += Math.min(candidate.buttonLabels.length, 20);
+      result += Math.min(candidate.bodyText.length, 4000) / 1000;
+      return result;
+    };
+
+    return score(snapshot) >= score(current);
+  }
+
+  private toJoinDiagnostics(snapshot: TeamsJoinSnapshot): Record<string, unknown> {
+    return {
+      pageUrl: snapshot.pageUrl,
+      joinedBy: snapshot.joinedBy,
+      waitingToBeAdmitted: snapshot.waitingToBeAdmitted,
+      ended: snapshot.ended,
+      dialogTexts: snapshot.dialogTexts,
+      buttonLabels: snapshot.buttonLabels,
+    };
   }
 
   /**

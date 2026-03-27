@@ -309,3 +309,44 @@ Still pending:
 - live runtime validation of the patched Zoom bot against the observed Zoom variants
 - follow-on cleanup for ECS task protection warnings
 - follow-on cleanup for browser-log shutdown noise
+
+## Cross-Provider Follow-On
+
+Date updated: 2026-03-27
+
+The same targeted join-path instrumentation pattern has now been extended to:
+
+- Google Meet
+- Microsoft Teams
+
+This follow-on work does not attempt a broad shared refactor. It adds provider-specific failure evidence at the point where admission or join-state detection can still fail.
+
+Added for Google Meet:
+
+- join-time snapshots capturing page URL, body text excerpt, dialog text, visible button labels, and participant-count signals
+- explicit distinction between:
+  - joined
+  - waiting on host
+  - request timed out
+  - denied by participant
+  - ended before recording
+- best-effort debug screenshot upload on join timeout when misc storage is configured
+
+Added for Microsoft Teams:
+
+- join-time snapshots capturing page URL, body text excerpt, dialog text, and visible button labels
+- explicit distinction between:
+  - joined
+  - still waiting to be admitted
+  - denied access
+  - ended before recording
+- best-effort debug screenshot upload on join timeout when misc storage is configured
+
+Files changed in this extension:
+
+- `src/bots/GoogleMeetBot.ts`
+- `src/bots/MicrosoftTeamsBot.ts`
+
+Verification completed:
+
+- `npm run build` succeeded on 2026-03-27 after the changes
