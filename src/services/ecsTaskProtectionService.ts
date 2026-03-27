@@ -27,6 +27,20 @@ const getTaskProtectionUrl = (): string | null => {
   return `${ecsAgentUri.replace(/\/$/, '')}${TASK_PROTECTION_PATH}`;
 };
 
+const getSerializableErrorBody = (data: unknown): string | null => {
+  if (data == null) {
+    return null;
+  }
+  if (typeof data === 'string') {
+    return data;
+  }
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return String(data);
+  }
+};
+
 export const setTaskProtection = async (enabled: boolean): Promise<void> => {
   if (!config.ecsTaskProtectionEnabled) {
     return;
@@ -70,9 +84,19 @@ export const setTaskProtection = async (enabled: boolean): Promise<void> => {
     }
 
     console.warn(
-      `[ecs-task-protection] Failed to set ProtectionEnabled=${enabled}. HTTP ${response.status}.`
+      `[ecs-task-protection] Failed to set ProtectionEnabled=${enabled}. HTTP ${response.status}. Body=${getSerializableErrorBody(response.data) ?? '(empty)'}`
     );
   } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      const responseBody = getSerializableErrorBody(error.response?.data);
+      const errorMessage = error.message;
+      console.warn(
+        `[ecs-task-protection] Error setting ProtectionEnabled=${enabled}: ${errorMessage}; status=${status ?? 'unknown'}; body=${responseBody ?? '(empty)'}; url=${url}`
+      );
+      return;
+    }
+
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.warn(
       `[ecs-task-protection] Error setting ProtectionEnabled=${enabled}: ${errorMessage}`

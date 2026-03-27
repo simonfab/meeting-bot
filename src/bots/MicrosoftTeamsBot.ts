@@ -55,6 +55,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     };
 
     try {
+      await setTaskProtection(true);
       const pushState = (st: BotStatus) => _state.push(st);
       await this.joinMeeting({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, pushState, uploader, metadata });
 
@@ -677,12 +678,17 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       // Start audio silence detection (runs in parallel with participant detection)
       // Convert inactivityLimit from minutes to milliseconds
       const inactivityLimitMs = config.inactivityLimit * 60 * 1000;
+      const effectiveInactivityDetectionDelayMinutes = Math.max(
+        config.activateInactivityDetectionAfter,
+        config.teamsInactivityDetectionGracePeriodMinutes
+      );
 
       const monitorAudioSilence = async () => {
         try {
           this._logger.info('Starting audio silence detection for Microsoft Teams', {
             inactivityLimitMs,
-            inactivityLimitMinutes: inactivityLimitMs / 60000
+            inactivityLimitMinutes: inactivityLimitMs / 60000,
+            effectiveStartDelayMinutes: effectiveInactivityDetectionDelayMinutes,
           });
           let consecutiveSilentChecks = 0;
           const checkIntervalSeconds = 5;
@@ -750,7 +756,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
         if (!meetingEnded && !ffmpegFailed) {
           monitorAudioSilence();
         }
-      }, config.activateInactivityDetectionAfter * 60 * 1000);
+      }, effectiveInactivityDetectionDelayMinutes * 60 * 1000);
 
       // Inject inactivity detection script
       await this.page.evaluate(
@@ -822,7 +828,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
           }, activateAfterMinutes * 60 * 1000);
         },
         {
-          activateAfterMinutes: config.activateInactivityDetectionAfter,
+          activateAfterMinutes: effectiveInactivityDetectionDelayMinutes,
           maxDuration: duration,
         }
       );

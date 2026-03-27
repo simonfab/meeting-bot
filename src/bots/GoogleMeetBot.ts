@@ -53,6 +53,7 @@ export class GoogleMeetBot extends MeetBotBase {
     };
 
     try {
+      await setTaskProtection(true);
       const pushState = (st: BotStatus) => _state.push(st);
       await this.joinMeeting({ url, name, bearerToken, teamId, timezone, userId, eventId, botId, uploader, metadata, pushState });
 
