@@ -10,7 +10,7 @@ import { globalJobStore } from '../lib/globalJobStore';
 import { IUploader } from '../middleware/disk-uploader';
 import { Logger } from 'winston';
 import { retryActionWithWait } from '../util/resilience';
-import { uploadDebugImage } from '../services/bugService';
+import { captureAndUploadDebugImage } from '../services/bugService';
 import createBrowserContext from '../lib/chromium';
 import { browserLogCaptureCallback, sanitizeUrlForLogs } from '../util/logger';
 import { MICROSOFT_REQUEST_DENIED } from '../constants';
@@ -209,7 +209,19 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       3,
       15000,
       async () => {
-        await uploadDebugImage(await this.page.screenshot({ type: 'png', fullPage: true }), 'join-button-click', userId, this._logger, botId);
+        await captureAndUploadDebugImage({
+          capture: () => this.page.screenshot({ type: 'png', fullPage: true }),
+          fileName: 'page',
+          userId,
+          logger: this._logger,
+          botId,
+          opts: {
+            meetingProvider: 'microsoft',
+            stage: 'prejoin',
+            reason: 'join-button-click',
+            runId: this._correlationId,
+          },
+        });
       }
     );
 
@@ -266,19 +278,28 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       if (!joinSnapshot?.joined) {
         const bodyText = joinSnapshot?.bodyText ?? await this.page.evaluate(() => document.body.innerText);
         const userDenied = joinSnapshot?.userDenied ?? (bodyText || '')?.includes(MICROSOFT_REQUEST_DENIED);
+        const artifactReason = joinSnapshot?.ended
+          ? 'meeting-ended'
+          : userDenied
+            ? 'user-denied'
+            : joinSnapshot?.waitingToBeAdmitted
+              ? 'waiting-to-be-admitted-timeout'
+              : 'join-timeout';
 
-        if (config.miscStorageBucket) {
-          try {
-            await uploadDebugImage(
-              await this.page.screenshot({ type: 'png', fullPage: true }),
-              'teams-join-timeout',
-              userId,
-              this._logger,
-              botId
-            );
-          } catch {
-            // Diagnostic screenshot upload is best-effort only.
-          }
+        if (config.debugArtifactsEnabled) {
+          await captureAndUploadDebugImage({
+            capture: () => this.page.screenshot({ type: 'png', fullPage: true }),
+            fileName: 'page',
+            userId,
+            logger: this._logger,
+            botId,
+            opts: {
+              meetingProvider: 'microsoft',
+              stage: 'join-failure',
+              reason: artifactReason,
+              runId: this._correlationId,
+            },
+          });
         }
 
         this._logger.error('Cant finish wait at the lobby check', {

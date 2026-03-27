@@ -5,6 +5,9 @@ import app, { redisConsumerService, setGracefulShutdown } from './app';
 import { globalJobStore } from './lib/globalJobStore';
 import messageBroker from './connect/messageBroker';
 import config from './config';
+import { runDebugArtifactSmokeTest } from './services/bugService';
+import { loggerFactory } from './util/logger';
+import { v4 } from 'uuid';
 
 const port = 3000;
 
@@ -13,6 +16,12 @@ const server = http.createServer(app);
 
 server.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
+  const debugArtifactsLogger = loggerFactory(v4(), 'debug-artifacts');
+  void runDebugArtifactSmokeTest(debugArtifactsLogger).catch((error) => {
+    debugArtifactsLogger.error('Debug artifact smoke test crashed unexpectedly', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 });
 
 // Flag to prevent multiple shutdown attempts

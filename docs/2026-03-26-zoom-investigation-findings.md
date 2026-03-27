@@ -330,7 +330,7 @@ Added for Google Meet:
   - request timed out
   - denied by participant
   - ended before recording
-- best-effort debug screenshot upload on join timeout when misc storage is configured
+- best-effort debug screenshot upload on join timeout when debug artifacts are enabled and object storage is configured
 
 Added for Microsoft Teams:
 
@@ -340,7 +340,7 @@ Added for Microsoft Teams:
   - still waiting to be admitted
   - denied access
   - ended before recording
-- best-effort debug screenshot upload on join timeout when misc storage is configured
+- best-effort debug screenshot upload on join timeout when debug artifacts are enabled and object storage is configured
 
 Files changed in this extension:
 
@@ -350,3 +350,31 @@ Files changed in this extension:
 Verification completed:
 
 - `npm run build` succeeded on 2026-03-27 after the changes
+
+## Debug Artifact Follow-On
+
+Date updated: 2026-03-27
+
+The debug screenshot path has now been moved off the old GCP-only implementation and onto the same object-storage provider stack used for recordings.
+
+Implemented:
+
+- `src/services/bugService.ts` now uploads PNG debug artifacts through the storage provider abstraction
+- when `STORAGE_PROVIDER=s3`, debug artifacts use the same S3 configuration and default AWS credential chain as recording uploads
+- no static access keys were added to support this path
+- join-time screenshots for Zoom, Google Meet, and Microsoft Teams now gate on `DEBUG_ARTIFACTS_ENABLED` instead of the old GCP bucket setting
+- startup now performs a best-effort debug artifact smoke test
+- the smoke test is explicitly non-blocking and cannot fail startup
+- debug artifact keys now include environment, meeting provider, failure stage, bot identity, host identity, and timestamp
+- debug artifact logs now include the exact object key and distinguish capture failure from upload failure
+
+Default configuration:
+
+- `DEBUG_ARTIFACTS_ENABLED=true`
+- `DEBUG_ARTIFACTS_SMOKE_TEST_ON_START=true`
+- `DEBUG_ARTIFACT_PREFIX=meeting-bot/debug`
+
+Operational intent:
+
+- in production, a failed join should now attempt to upload a screenshot into the same object storage system already used for recordings
+- on ECS, the task role can provide bucket access through the default AWS provider chain

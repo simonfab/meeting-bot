@@ -35,6 +35,22 @@ const isEcsTaskProtectionEnabled = (() => {
   return true;
 })();
 
+const isDebugArtifactsEnabled = (() => {
+  const raw = process.env.DEBUG_ARTIFACTS_ENABLED;
+  if (typeof raw === 'string' && raw.trim().toLowerCase() === 'false') {
+    return false;
+  }
+  return true;
+})();
+
+const isDebugArtifactsSmokeTestEnabled = (() => {
+  const raw = process.env.DEBUG_ARTIFACTS_SMOKE_TEST_ON_START;
+  if (typeof raw === 'string' && raw.trim().toLowerCase() === 'false') {
+    return false;
+  }
+  return true;
+})();
+
 const parsePositiveInteger = (raw: string | undefined, defaultValue: number): number => {
   if (!raw) return defaultValue;
   const parsed = Number(raw);
@@ -65,10 +81,7 @@ console.log(
   isAudioOnlyRecordingEnabled
 );
 
-const requiredSettings = [
-  'GCP_DEFAULT_REGION',
-  'GCP_MISC_BUCKET',
-];
+const requiredSettings: string[] = [];
 const missingSettings = requiredSettings.filter((s) => !process.env[s]);
 if (missingSettings.length > 0) {
   missingSettings.forEach((ms) =>
@@ -117,11 +130,9 @@ export default {
   ecsTaskProtectionEnabled: isEcsTaskProtectionEnabled,
   ecsTaskProtectionExpiresInMinutes: ecsTaskProtectionExpiresInMinutes,
   ecsTaskProtectionTimeoutMs: ecsTaskProtectionTimeoutMs,
-  miscStorageBucket: process.env.GCP_MISC_BUCKET,
-  miscStorageFolder: process.env.GCP_MISC_BUCKET_FOLDER ? process.env.GCP_MISC_BUCKET_FOLDER : 'meeting-bot',
-  region: process.env.GCP_DEFAULT_REGION,
-  accessKey: process.env.GCP_ACCESS_KEY_ID ?? '',
-  accessSecret: process.env.GCP_SECRET_ACCESS_KEY ?? '',
+  debugArtifactsEnabled: isDebugArtifactsEnabled,
+  debugArtifactsSmokeTestOnStart: isDebugArtifactsSmokeTestEnabled,
+  debugArtifactsPrefix: process.env.DEBUG_ARTIFACT_PREFIX ? process.env.DEBUG_ARTIFACT_PREFIX : 'meeting-bot/debug',
   redisQueueName: process.env.REDIS_QUEUE_NAME ?? 'jobs:meetbot:list',
   redisUri: constructRedisUri(),
   // Notification: Webhook (disabled by default)

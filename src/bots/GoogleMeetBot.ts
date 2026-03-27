@@ -10,7 +10,7 @@ import { Logger } from 'winston';
 import { browserLogCaptureCallback, sanitizeUrlForLogs } from '../util/logger';
 import { getWaitingPromise } from '../lib/promise';
 import { retryActionWithWait } from '../util/resilience';
-import { uploadDebugImage } from '../services/bugService';
+import { captureAndUploadDebugImage } from '../services/bugService';
 import createBrowserContext from '../lib/chromium';
 import { GOOGLE_LOBBY_MODE_HOST_TEXT, GOOGLE_REQUEST_DENIED, GOOGLE_REQUEST_TIMEOUT } from '../constants';
 import { vp9MimeType, webmMimeType } from '../lib/recording';
@@ -168,7 +168,19 @@ export class GoogleMeetBot extends MeetBotBase {
       3,
       15000,
       async () => {
-        await uploadDebugImage(await this.page.screenshot({ type: 'png', fullPage: true }), 'text-input-field-wait', userId, this._logger, botId);
+        await captureAndUploadDebugImage({
+          capture: () => this.page.screenshot({ type: 'png', fullPage: true }),
+          fileName: 'page',
+          userId,
+          logger: this._logger,
+          botId,
+          opts: {
+            meetingProvider: 'google',
+            stage: 'prejoin',
+            reason: 'input-wait',
+            runId: this._correlationId,
+          },
+        });
       }
     );
 
@@ -214,7 +226,19 @@ export class GoogleMeetBot extends MeetBotBase {
       3,
       15000,
       async () => {
-        await uploadDebugImage(await this.page.screenshot({ type: 'png', fullPage: true }), 'ask-to-join-button-click', userId, this._logger, botId);
+        await captureAndUploadDebugImage({
+          capture: () => this.page.screenshot({ type: 'png', fullPage: true }),
+          fileName: 'page',
+          userId,
+          logger: this._logger,
+          botId,
+          opts: {
+            meetingProvider: 'google',
+            stage: 'prejoin',
+            reason: 'join-action-failure',
+            runId: this._correlationId,
+          },
+        });
       }
     );
 
@@ -309,19 +333,30 @@ export class GoogleMeetBot extends MeetBotBase {
       if (!joinSnapshot?.joined) {
         const bodyText = joinSnapshot?.bodyText ?? await this.page.evaluate(() => document.body.innerText);
         const userDenied = joinSnapshot?.userDenied ?? (bodyText || '')?.includes(GOOGLE_REQUEST_DENIED);
+        const artifactReason = joinSnapshot?.ended
+          ? 'meeting-ended'
+          : userDenied
+            ? 'user-denied'
+            : joinSnapshot?.requestTimedOut
+              ? 'request-timed-out'
+              : joinSnapshot?.waitingOnHost
+                ? 'waiting-on-host-timeout'
+                : 'join-timeout';
 
-        if (config.miscStorageBucket) {
-          try {
-            await uploadDebugImage(
-              await this.page.screenshot({ type: 'png', fullPage: true }),
-              'google-join-timeout',
-              userId,
-              this._logger,
-              botId
-            );
-          } catch {
-            // Diagnostic screenshot upload is best-effort only.
-          }
+        if (config.debugArtifactsEnabled) {
+          await captureAndUploadDebugImage({
+            capture: () => this.page.screenshot({ type: 'png', fullPage: true }),
+            fileName: 'page',
+            userId,
+            logger: this._logger,
+            botId,
+            opts: {
+              meetingProvider: 'google',
+              stage: 'join-failure',
+              reason: artifactReason,
+              runId: this._correlationId,
+            },
+          });
         }
 
         this._logger.error('Cant finish wait at the lobby check', {

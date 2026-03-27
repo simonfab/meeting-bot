@@ -52,7 +52,7 @@ Classified states:
 Failure behavior:
 
 - logs structured diagnostics before throwing
-- uploads a best-effort `google-join-timeout` screenshot if misc storage is configured
+- uploads a best-effort `google-join-timeout` screenshot when debug artifacts are enabled and object storage is configured
 - throws `MeetingEndedError` when Meet ends before recording starts
 
 ### Microsoft Teams
@@ -76,7 +76,7 @@ Classified states:
 Failure behavior:
 
 - logs structured diagnostics before throwing
-- uploads a best-effort `teams-join-timeout` screenshot if misc storage is configured
+- uploads a best-effort `teams-join-timeout` screenshot when debug artifacts are enabled and object storage is configured
 - throws `MeetingEndedError` when Teams ends before recording starts
 
 ## Verification

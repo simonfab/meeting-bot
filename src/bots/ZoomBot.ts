@@ -11,7 +11,7 @@ import { RecordingTask } from '../tasks/RecordingTask';
 import { ContextBridgeTask } from '../tasks/ContextBridgeTask';
 import { getWaitingPromise } from '../lib/promise';
 import createBrowserContext from '../lib/chromium';
-import { uploadDebugImage } from '../services/bugService';
+import { captureAndUploadDebugImage } from '../services/bugService';
 import { Logger } from 'winston';
 import { handleWaitingAtLobbyError } from './MeetBotBase';
 import { ZOOM_REQUEST_DENIED } from '../constants';
@@ -204,7 +204,19 @@ export class ZoomBot extends BotBase {
         }
       } else {
         // Last resort: direct URL
-        await uploadDebugImage(await this.page.screenshot({ type: 'png', fullPage: true }), 'enable-join-from-browser', params.userId, this._logger, params.botId);
+        await captureAndUploadDebugImage({
+          capture: () => this.page.screenshot({ type: 'png', fullPage: true }),
+          fileName: 'page',
+          userId: params.userId,
+          logger: this._logger,
+          botId: params.botId,
+          opts: {
+            meetingProvider: 'zoom',
+            stage: 'fallback',
+            reason: 'join-from-browser-missing',
+            runId: this._correlationId,
+          },
+        });
         this._logger.info('FALLBACK: Could not find Join from browser, trying direct URL...');
         const wcUrl = new URL(url);
         wcUrl.pathname = wcUrl.pathname.replace('/j/', '/wc/join/');
@@ -315,19 +327,28 @@ export class ZoomBot extends BotBase {
 
         const bodyText = joinSnapshot ? this.getDiagnosticBodyText(joinSnapshot) : await this.page.evaluate(() => document.body.innerText);
         const userDenied = joinSnapshot?.userDenied ?? (bodyText || '')?.includes(ZOOM_REQUEST_DENIED);
+        const artifactReason = joinSnapshot?.endedByHost
+          ? 'meeting-ended'
+          : userDenied
+            ? 'user-denied'
+            : joinSnapshot?.waitingOnHost
+              ? 'waiting-on-host-timeout'
+              : 'join-timeout';
 
-        if (config.miscStorageBucket) {
-          try {
-            await uploadDebugImage(
-              await this.page.screenshot({ type: 'png', fullPage: true }),
-              'zoom-join-timeout',
-              params.userId,
-              this._logger,
-              params.botId
-            );
-          } catch {
-            // Diagnostic screenshot upload is best-effort only.
-          }
+        if (config.debugArtifactsEnabled) {
+          await captureAndUploadDebugImage({
+            capture: () => this.page.screenshot({ type: 'png', fullPage: true }),
+            fileName: 'page',
+            userId: params.userId,
+            logger: this._logger,
+            botId: params.botId,
+            opts: {
+              meetingProvider: 'zoom',
+              stage: 'join-failure',
+              reason: artifactReason,
+              runId: this._correlationId,
+            },
+          });
         }
 
         this._logger.error('Cant finish wait at the lobby check', {

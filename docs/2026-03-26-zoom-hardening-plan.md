@@ -68,8 +68,22 @@ Cross-provider follow-on completed on 2026-03-27:
 - targeted join-path diagnostics were added to `GoogleMeetBot`
 - targeted join-path diagnostics were added to `MicrosoftTeamsBot`
 - both now capture structured failure evidence before throwing join/admission errors
-- both now use best-effort timeout screenshots when misc storage is configured
+- both now use best-effort timeout screenshots when debug artifacts are enabled and object storage is configured
 - both now distinguish ended-before-recording from generic lobby timeout
+
+Debug-artifact storage follow-on completed on 2026-03-27:
+
+- the old GCP-only debug screenshot uploader was replaced with an object-storage-backed implementation
+- debug screenshots now reuse the same storage provider abstraction used by recording uploads
+- in S3 deployments, debug artifacts now rely on the existing S3 bucket configuration and default AWS credential chain
+- startup now performs a best-effort debug artifact smoke test by default
+- the smoke test is explicitly non-blocking and cannot fail startup
+- debug artifact keys now include environment, meeting provider, failure stage, bot identity, host identity, and timestamp
+- debug artifact logging now records the exact object key and logs capture failure vs upload failure separately
+- the debug artifact defaults are now:
+  - `DEBUG_ARTIFACTS_ENABLED=true`
+  - `DEBUG_ARTIFACTS_SMOKE_TEST_ON_START=true`
+  - `DEBUG_ARTIFACT_PREFIX=meeting-bot/debug`
 
 ## Phase 1: Pre-Join Hardening
 

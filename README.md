@@ -479,6 +479,24 @@ Notes:
 - When `STORAGE_PROVIDER=azure` is set and Azure environment variables are provided, the upload will go to Azure Blob Storage instead of S3.
 - Signed URL generation for Azure uses SAS tokens with a configurable TTL via `AZURE_SIGNED_URL_TTL_SECONDS`.
 
+#### Debug Artifacts
+
+Join-failure screenshots and startup smoke-test artifacts use the same object storage provider as recordings. No separate Google Cloud Storage configuration is required.
+
+- `DEBUG_ARTIFACTS_ENABLED` defaults to `true`
+- `DEBUG_ARTIFACTS_SMOKE_TEST_ON_START` defaults to `true`
+- `DEBUG_ARTIFACT_PREFIX` defaults to `meeting-bot/debug`
+
+In production on ECS, the debug artifact uploader uses the same S3 configuration and default AWS credential chain as recording uploads. If the task role already has write access to the bucket, no access keys or secrets need to be added.
+
+Artifact keys include environment, meeting provider, failure stage, user, bot, optional run id, host, and timestamp so failed joins can be traced back quickly in S3.
+
+The startup smoke test is best-effort only:
+
+- it never blocks startup
+- it never throws out of server startup
+- it only logs success or failure
+
 ## ⚙️ Configuration
 
 ### Environment Variables
@@ -508,6 +526,9 @@ Notes:
 | `S3_BUCKET_NAME` | Target bucket name for uploads | - |
 | `S3_REGION` | AWS region (for AWS S3) | - |
 | `S3_USE_MINIO_COMPATIBILITY` | Enable MinIO compatibility mode | `false` |
+| `DEBUG_ARTIFACTS_ENABLED` | Upload debug screenshots to object storage | `true` |
+| `DEBUG_ARTIFACTS_SMOKE_TEST_ON_START` | Upload a startup smoke-test PNG to object storage | `true` |
+| `DEBUG_ARTIFACT_PREFIX` | Prefix used for debug artifacts in object storage | `meeting-bot/debug` |
 
 ### Docker Configuration
 
