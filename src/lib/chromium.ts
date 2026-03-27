@@ -2,7 +2,7 @@ import { Browser, BrowserContext, Page } from 'playwright';
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import config from '../config';
-import { getCorrelationIdLog } from '../util/logger';
+import { getCorrelationIdLog, sanitizeUrlForLogs } from '../util/logger';
 
 const stealthPlugin = StealthPlugin();
 stealthPlugin.enabledEvasions.delete('iframe.contentWindow');
@@ -27,11 +27,11 @@ function attachBrowserErrorHandlers(browser: Browser, context: BrowserContext, p
   });
 
   page.on('crash', (page) => {
-    console.error(`${log} Page has crashed! ${page?.url()}`);
+    console.error(`${log} Page has crashed! ${sanitizeUrlForLogs(page?.url()) ?? page?.url()}`);
   });
 
   page.on('close', (page) => {
-    console.log(`${log} Page has closed! ${page?.url()}`);
+    console.log(`${log} Page has closed! ${sanitizeUrlForLogs(page?.url()) ?? page?.url()}`);
   });
 }
 

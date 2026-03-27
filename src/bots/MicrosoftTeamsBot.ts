@@ -642,6 +642,9 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     // Track FFmpeg status
     let ffmpegFailed = false;
     let ffmpegError: Error | null = null;
+    let meetingEnded = false;
+    let audioSilenceInterval: NodeJS.Timeout | null = null;
+    let audioSilenceStartTimeout: NodeJS.Timeout | null = null;
 
     try {
       await recorder.start();
@@ -657,7 +660,6 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       });
 
       // Set up browser-based inactivity detection
-      let meetingEnded = false;
       await this.page.exposeFunction('screenAppMeetEnd', () => {
         this._logger.info('Meeting ended signal received from browser');
         meetingEnded = true;
@@ -686,8 +688,16 @@ export class MicrosoftTeamsBot extends MeetBotBase {
           const checkIntervalSeconds = 5;
           const checksNeeded = Math.ceil(inactivityLimitMs / 1000 / checkIntervalSeconds);
 
-          const checkInterval = setInterval(async () => {
+          audioSilenceInterval = setInterval(async () => {
             try {
+              if (meetingEnded || ffmpegFailed) {
+                if (audioSilenceInterval) {
+                  clearInterval(audioSilenceInterval);
+                  audioSilenceInterval = null;
+                }
+                return;
+              }
+
               const { stdout } = await execAsync(
                 'timeout 1 parec --device=virtual_output.monitor --format=s16le --rate=16000 --channels=1 2>/dev/null | ' +
                 'od -An -td2 -v | awk \'BEGIN{max=0} {for(i=1;i<=NF;i++) {val=($i<0)?-$i:$i; if(val>max) max=val}} END{print max}\''
@@ -712,7 +722,10 @@ export class MicrosoftTeamsBot extends MeetBotBase {
                     checksNeeded,
                     checksDetected: consecutiveSilentChecks
                   });
-                  clearInterval(checkInterval);
+                  if (audioSilenceInterval) {
+                    clearInterval(audioSilenceInterval);
+                    audioSilenceInterval = null;
+                  }
                   meetingEnded = true;
                 }
               } else {
@@ -733,8 +746,10 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       };
 
       // Start silence monitoring after delay
-      setTimeout(() => {
-        monitorAudioSilence();
+      audioSilenceStartTimeout = setTimeout(() => {
+        if (!meetingEnded && !ffmpegFailed) {
+          monitorAudioSilence();
+        }
       }, config.activateInactivityDetectionAfter * 60 * 1000);
 
       // Inject inactivity detection script
@@ -835,6 +850,15 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       ffmpegError = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
+      if (audioSilenceStartTimeout) {
+        clearTimeout(audioSilenceStartTimeout);
+        audioSilenceStartTimeout = null;
+      }
+      if (audioSilenceInterval) {
+        clearInterval(audioSilenceInterval);
+        audioSilenceInterval = null;
+      }
+
       // Always stop ffmpeg
       this._logger.info('Stopping ffmpeg recording...');
       await recorder.stop();

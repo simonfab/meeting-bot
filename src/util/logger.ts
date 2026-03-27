@@ -12,6 +12,10 @@ const REDACTED_QUERY_PARAMS = new Set([
   'apikey',
   'key',
   'code',
+  'p',
+  'coords',
+  'correlationid',
+  'deeplinkid',
   '_x_zm_rtaid',
   '_x_zm_rhtaid',
   'wpk',
@@ -35,7 +39,7 @@ export const sanitizeUrlForLogs = (rawUrl?: string | null): string | undefined =
     return parsed.toString();
   } catch {
     return rawUrl.replace(
-      /([?&](pwd|token|sig|signature|auth|apikey|key|code|_x_zm_rtaid|_x_zm_rhtaid|wpk)=)[^&]+/ig,
+      /([?&](pwd|token|sig|signature|auth|apikey|key|code|p|coords|correlationid|deeplinkid|_x_zm_rtaid|_x_zm_rhtaid|wpk)=)[^&]+/ig,
       '$1REDACTED'
     );
   }
