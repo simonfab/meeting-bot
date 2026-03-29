@@ -345,7 +345,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     if (metadata?.meeting_id && metadata?.tenantId) {
       notifyMafStatus(metadata.meeting_id, metadata.tenantId, 'recording', this._logger);
     }
-    await this.recordMeetingPageWithFFmpeg({ teamId, userId, eventId, botId, uploader });
+    await this.recordMeetingPageWithFFmpeg({ teamId, userId, eventId, botId, uploader, metadata });
 
     pushState('finished');
   }
@@ -565,8 +565,8 @@ export class MicrosoftTeamsBot extends MeetBotBase {
   }
 
   private async recordMeetingPageWithFFmpeg(
-    { teamId, userId, eventId, botId, uploader }:
-    { teamId: string, userId: string, eventId?: string, botId?: string, uploader: IUploader }
+    { teamId, userId, eventId, botId, uploader, metadata }:
+    { teamId: string, userId: string, eventId?: string, botId?: string, uploader: IUploader, metadata?: Record<string, any> }
   ): Promise<void> {
     // Use config max recording duration (3 hours default) - only for safety
     const duration = config.maxRecordingDuration * 60 * 1000;
@@ -647,6 +647,9 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     let audioSilenceInterval: NodeJS.Timeout | null = null;
     let audioSilenceStartTimeout: NodeJS.Timeout | null = null;
 
+    // Track participant presence events for speaker diarization
+    const participantEvents: Array<{ timestamp: string, names: string[], count: number | null, event: string }> = [];
+
     try {
       await recorder.start();
       this._logger.info('FFmpeg recording started successfully');
@@ -664,6 +667,17 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       await this.page.exposeFunction('screenAppMeetEnd', () => {
         this._logger.info('Meeting ended signal received from browser');
         meetingEnded = true;
+      });
+
+      // Bridge participant updates from browser to Node.js
+      await this.page.exposeFunction('screenAppParticipantUpdate', (data: string) => {
+        try {
+          const event = JSON.parse(data);
+          participantEvents.push(event);
+          this._logger.info('Participant roster update', event);
+        } catch (err) {
+          this._logger.error('Failed to parse participant update:', err);
+        }
       });
 
       // Capture and forward browser console logs to Node.js logger
@@ -803,8 +817,87 @@ export class MicrosoftTeamsBot extends MeetBotBase {
           // Participant detection — starts immediately, state-aware
           // Phase 1: Wait for someone to join (count >= 2)
           // Phase 2: Once participants seen, end as soon as bot is alone (count < 2)
+          // Also scrapes participant names by clicking the People panel open
           console.log('Participant count detection active (waiting for participants to join)...');
           let hasSeenParticipants = false;
+          let peoplePanelOpened = false;
+          let lastKnownNames: string[] = [];
+          let lastParticipantCount = 0;
+
+          // Noise patterns to filter from scraped names
+          const NOISE_PATTERNS = [
+            /^in this meeting/i,
+            /^people$/i, /^mute$/i, /^unmute$/i, /^pin$/i, /^remove$/i,
+            /^more$/i, /^chat$/i, /^share$/i, /^camera$/i, /^mic$/i,
+            /^organizer$/i, /^presenter$/i, /^attendee$/i,
+            /^\d+$/, // pure numbers
+            /^invited \(\d+\)/i, /^in this call/i, /^others/i,
+          ];
+
+          const BOT_NAME_PATTERNS = [/^maf scribe$/i, /^scribe$/i, /^recording bot$/i];
+
+          const isNoise = (text: string): boolean =>
+            NOISE_PATTERNS.some(p => p.test(text)) || BOT_NAME_PATTERNS.some(p => p.test(text));
+
+          // Click the People button to open the roster panel
+          const openPeoplePanel = () => {
+            try {
+              const peopleBtn = document.querySelector('button[aria-label=People]') as HTMLElement
+                || document.querySelector('button[aria-label*="People"]') as HTMLElement;
+              if (peopleBtn && !peoplePanelOpened) {
+                peopleBtn.click();
+                peoplePanelOpened = true;
+                console.log('[PARTICIPANT_NAMES] People panel clicked open');
+              }
+            } catch (err) {
+              console.error('[PARTICIPANT_NAMES] Failed to open People panel:', err);
+            }
+          };
+
+          // Scrape participant names from the open People/roster panel
+          const scrapeParticipantNames = (): string[] => {
+            const names: string[] = [];
+            try {
+              const selectors = [
+                '[data-tid="roster-participant"] [data-tid="roster-participant-name"]',
+                '[data-tid="roster-participant-name"]',
+                '[role="list"] [role="listitem"] span',
+                '[data-cid*="calling-roster"] span',
+                '[data-tid*="roster"] span',
+                '[class*="roster"] [class*="name"]',
+                '[class*="participant"] [class*="name"]',
+              ];
+
+              for (const selector of selectors) {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach(el => {
+                  const text = (el as HTMLElement)?.innerText?.trim();
+                  if (text && text.length > 1 && text.length < 80 && !isNoise(text)) {
+                    names.push(text);
+                  }
+                });
+                if (names.length > 0) break;
+              }
+            } catch (err) {
+              console.error('[PARTICIPANT_NAMES] Scrape error:', err);
+            }
+            return [...new Set(names)];
+          };
+
+          // Report participant update to Node.js via exposed function
+          const reportParticipantUpdate = (count: number | null, names: string[], event: string) => {
+            const data = JSON.stringify({
+              timestamp: new Date().toISOString(),
+              count,
+              names,
+              event,
+            });
+            try {
+              (window as any).screenAppParticipantUpdate(data);
+            } catch (err) {
+              console.log(`[PARTICIPANT_NAMES] ${data}`);
+            }
+          };
 
           const participantInterval = setInterval(() => {
             try {
@@ -818,16 +911,30 @@ export class MicrosoftTeamsBot extends MeetBotBase {
                 if (!hasSeenParticipants) {
                   console.log(`Participants joined (count: ${count}) — meeting is active`);
                   hasSeenParticipants = true;
+                  openPeoplePanel();
                 }
-                return; // Still has participants, keep going
+
+                // Scrape names when count changes
+                if (count !== lastParticipantCount) {
+                  const prevCount = lastParticipantCount;
+                  lastParticipantCount = count;
+                  setTimeout(() => {
+                    const currentNames = scrapeParticipantNames();
+                    const namesChanged = JSON.stringify(currentNames.sort()) !== JSON.stringify(lastKnownNames.sort());
+                    if (namesChanged && currentNames.length > 0) {
+                      lastKnownNames = currentNames;
+                      reportParticipantUpdate(count, currentNames, count > prevCount ? 'participant_joined' : 'participant_left');
+                    }
+                  }, 1000);
+                }
+                return;
               }
 
               if (hasSeenParticipants) {
-                // Everyone left — end immediately
                 clearInterval(participantInterval);
+                reportParticipantUpdate(count, lastKnownNames, 'all_left');
                 endMeetingOnce(`Bot is alone after participants left (count: ${count})`);
               }
-              // If !hasSeenParticipants, keep waiting — bot arrived early
             } catch (error) {
               console.error('Participant detection error:', error);
             }
@@ -869,6 +976,19 @@ export class MicrosoftTeamsBot extends MeetBotBase {
       if (audioSilenceInterval) {
         clearInterval(audioSilenceInterval);
         audioSilenceInterval = null;
+      }
+
+      // Attach participant events to metadata for webhook payload
+      if (participantEvents.length > 0 && metadata) {
+        metadata.participantEvents = participantEvents;
+        // Also include a flat list of unique detected names for easy access
+        const allNames = new Set<string>();
+        participantEvents.forEach(e => e.names.forEach(n => allNames.add(n)));
+        metadata.detectedParticipants = Array.from(allNames);
+        this._logger.info('Participant detection summary', {
+          eventCount: participantEvents.length,
+          detectedParticipants: metadata.detectedParticipants,
+        });
       }
 
       // Always stop ffmpeg
