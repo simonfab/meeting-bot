@@ -8,7 +8,7 @@ import { patchBotStatus } from '../services/botService';
 import { notifyMafStatus } from '../services/notificationService';
 import { globalJobStore } from '../lib/globalJobStore';
 import { RecordingTask } from '../tasks/RecordingTask';
-import { ContextBridgeTask } from '../tasks/ContextBridgeTask';
+import { ContextBridgeTask, ParticipantEvent } from '../tasks/ContextBridgeTask';
 import { getWaitingPromise } from '../lib/promise';
 import createBrowserContext from '../lib/chromium';
 import { captureAndUploadDebugImage } from '../services/bugService';
@@ -778,8 +778,11 @@ export class ZoomBot extends BotBase {
   }
 
   private async recordMeetingPage(params: JoinParams): Promise<void> {
-    const { teamId, userId, eventId, botId, uploader } = params;
+    const { teamId, userId, eventId, botId, uploader, metadata } = params;
     const duration = config.maxRecordingDuration * 60 * 1000;
+
+    // Track participant presence events for speaker diarization
+    const participantEvents: ParticipantEvent[] = [];
 
     this._logger.info('Setting up the duration');
     const processingTime = 0.2 * 60 * 1000;
@@ -792,7 +795,8 @@ export class ZoomBot extends BotBase {
       this.slightlySecretId.toString(),
       waitingPromise,
       uploader,
-      this._logger
+      this._logger,
+      participantEvents,
     );
     await chores.runAsync(null);
 
@@ -816,5 +820,18 @@ export class ZoomBot extends BotBase {
       this._logger.info('All done ✨', { botId, eventId, userId, teamId });
     });
     await waitingPromise.promise;
+
+    // Attach participant events to metadata for webhook payload
+    if (participantEvents.length > 0 && metadata) {
+      metadata.participantEvents = participantEvents;
+      // Also include a flat list of unique detected names for easy access
+      const allNames = new Set<string>();
+      participantEvents.forEach(e => e.names.forEach(n => allNames.add(n)));
+      metadata.detectedParticipants = Array.from(allNames);
+      this._logger.info('Participant detection summary', {
+        eventCount: participantEvents.length,
+        detectedParticipants: metadata.detectedParticipants,
+      });
+    }
   }
 }

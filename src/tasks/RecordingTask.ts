@@ -182,6 +182,138 @@ export class RecordingTask extends Task<null, void> {
           let hasSeenParticipants = false;
           console.log('Participant count detection active (waiting for participants to join)...');
 
+          // --- Participant name scraping ---
+          let participantsPanelOpened = false;
+          let lastKnownNames: string[] = [];
+          let lastParticipantCount = 0;
+
+          // Noise patterns to filter from scraped names
+          const NOISE_PATTERNS = [
+            /^in this meeting/i, /^in this call/i,
+            /^people$/i, /^mute$/i, /^unmute$/i, /^pin$/i, /^remove$/i,
+            /^more$/i, /^chat$/i, /^share$/i, /^camera$/i, /^mic$/i,
+            /^audio$/i, /^video$/i, /^host$/i, /^co-host$/i,
+            /^organizer$/i, /^presenter$/i, /^attendee$/i,
+            /^\d+$/, // pure numbers
+            /^invited \(\d+\)/i, /^others/i, /^participants/i,
+            /^waiting room/i, /^raise hand/i,
+          ];
+
+          const BOT_NAME_PATTERNS = [
+            /notetaker/i, /note\s*taker/i, /recording\s*bot/i,
+            /screenapp/i, /scribe/i, /^bot$/i,
+          ];
+
+          const isNoise = (text: string): boolean =>
+            NOISE_PATTERNS.some(p => p.test(text)) || BOT_NAME_PATTERNS.some(p => p.test(text));
+
+          // Click the Participants button to open the participant panel in Zoom
+          const openParticipantsPanel = (dom: Document) => {
+            try {
+              // Zoom uses a "Participants" button in the footer toolbar
+              let participantsBtn: Element | null = null;
+
+              // Method 1: aria-label based
+              participantsBtn = dom.querySelector('button[aria-label*="Participants"]')
+                || dom.querySelector('button[aria-label*="participants"]');
+
+              // Method 2: button with "Participants" text
+              if (!participantsBtn) {
+                const allBtns = Array.from(dom.querySelectorAll('button'));
+                participantsBtn = allBtns.find(b =>
+                  /participants/i.test((b as HTMLElement).innerText?.trim() ?? '')
+                ) || null;
+              }
+
+              // Method 3: footer button that shows participant count
+              if (!participantsBtn) {
+                const footerBtns = Array.from(dom.querySelectorAll('#wc-footer button, [class*="footer"] button'));
+                participantsBtn = footerBtns.find(b => {
+                  const text = (b as HTMLElement).innerText?.trim() ?? '';
+                  return /^\d+/.test(text);
+                }) || null;
+              }
+
+              if (participantsBtn && !participantsPanelOpened) {
+                (participantsBtn as HTMLElement).click();
+                participantsPanelOpened = true;
+                console.log('[PARTICIPANT_NAMES] Participants panel clicked open');
+              }
+            } catch (err) {
+              console.error('[PARTICIPANT_NAMES] Failed to open Participants panel:', err);
+            }
+          };
+
+          // Scrape participant names from the open Participants panel in Zoom
+          const scrapeParticipantNames = (dom: Document): string[] => {
+            const names: string[] = [];
+            try {
+              // Zoom web client participant list selectors
+              const selectors = [
+                // Zoom participant list items
+                '.participants-ul .participant-item .participant-item-name',
+                '.participants-ul .participant-item__name',
+                '.participants-section-container .participant-item span',
+                // Alternative: list-based
+                '[role="list"] [role="listitem"] span',
+                '[class*="participant"] [class*="name"]',
+                // Zoom web client specific
+                '.participants-li .participants-item__display-name',
+                '.participants-li span',
+                // Broader fallback
+                '[id*="participant"] [class*="name"]',
+                '[class*="attendee"] [class*="name"]',
+              ];
+
+              for (const selector of selectors) {
+                const elements = dom.querySelectorAll(selector);
+                elements.forEach(el => {
+                  const text = (el as HTMLElement)?.innerText?.trim();
+                  if (text && text.length > 1 && text.length < 80 && !isNoise(text)) {
+                    names.push(text);
+                  }
+                });
+                if (names.length > 0) break;
+              }
+
+              // Fallback: look for the participants panel container and extract names
+              if (names.length === 0) {
+                const panels = dom.querySelectorAll('[class*="participants"], [aria-label*="Participants"], [role="complementary"]');
+                panels.forEach(panel => {
+                  const listItems = panel.querySelectorAll('[role="listitem"], li, [class*="item"]');
+                  listItems.forEach(item => {
+                    const text = (item as HTMLElement)?.innerText?.trim();
+                    if (text && text.length > 1 && text.length < 80 && !isNoise(text)) {
+                      // Take only the first line (name), not status/controls text
+                      const firstName = text.split('\n')[0].trim();
+                      if (firstName && firstName.length > 1 && !isNoise(firstName)) {
+                        names.push(firstName);
+                      }
+                    }
+                  });
+                });
+              }
+            } catch (err) {
+              console.error('[PARTICIPANT_NAMES] Scrape error:', err);
+            }
+            return [...new Set(names)];
+          };
+
+          // Report participant update to Node.js via exposed function
+          const reportParticipantUpdate = (count: number | null, names: string[], event: string) => {
+            const data = JSON.stringify({
+              timestamp: new Date().toISOString(),
+              count,
+              names,
+              event,
+            });
+            try {
+              (window as any).screenAppParticipantUpdate(data);
+            } catch (err) {
+              console.log(`[PARTICIPANT_NAMES] ${data}`);
+            }
+          };
+
           const detectLoneParticipant = () => {
             let dom: Document = document;
             const iframe: HTMLIFrameElement | null = document.querySelector('iframe#webclient');
@@ -241,6 +373,21 @@ export class RecordingTask extends Task<null, void> {
                   if (!hasSeenParticipants) {
                     console.log(`Participants joined (count: ${count}) — meeting is active`);
                     hasSeenParticipants = true;
+                    openParticipantsPanel(dom);
+                  }
+
+                  // Scrape names when count changes
+                  if (count !== lastParticipantCount) {
+                    const prevCount = lastParticipantCount;
+                    lastParticipantCount = count;
+                    setTimeout(() => {
+                      const currentNames = scrapeParticipantNames(dom);
+                      const namesChanged = JSON.stringify(currentNames.sort()) !== JSON.stringify(lastKnownNames.sort());
+                      if (namesChanged && currentNames.length > 0) {
+                        lastKnownNames = currentNames;
+                        reportParticipantUpdate(count, currentNames, count > prevCount ? 'participant_joined' : 'participant_left');
+                      }
+                    }, 1000);
                   }
                   return;
                 }
@@ -249,6 +396,7 @@ export class RecordingTask extends Task<null, void> {
                   console.log(`Bot is alone after participants left (count: ${count})`, { userId, teamId });
                   clearInterval(loneTest);
                   monitor = false;
+                  reportParticipantUpdate(count, lastKnownNames, 'all_left');
                   stopTheRecording();
                 }
                 // If !hasSeenParticipants, keep waiting — bot arrived early

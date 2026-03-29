@@ -6,11 +6,14 @@ import { IUploader } from '../middleware/disk-uploader';
 import { Logger } from 'winston';
 import { browserLogCaptureCallback } from '../util/logger';
 
+export type ParticipantEvent = { timestamp: string; names: string[]; count: number | null; event: string };
+
 export class ContextBridgeTask extends Task<null, void> {
   private page: Page;
   private uploader: IUploader;
   private slightlySecretId: string;
   private waitingPromise: WaitPromise;
+  private participantEvents: ParticipantEvent[];
 
   constructor(
     page: Page,
@@ -18,13 +21,15 @@ export class ContextBridgeTask extends Task<null, void> {
     slightlySecretId: string,
     waitingPromise: WaitPromise,
     uploader: IUploader,
-    logger: Logger
+    logger: Logger,
+    participantEvents?: ParticipantEvent[],
   ) {
     super(logger);
     this.page = page;
     this.slightlySecretId = slightlySecretId;
     this.waitingPromise = waitingPromise;
     this.uploader = uploader;
+    this.participantEvents = participantEvents ?? [];
   }
 
   protected async execute(input: null): Promise<void> {
@@ -51,6 +56,17 @@ export class ContextBridgeTask extends Task<null, void> {
         this.waitingPromise.resolveEarly();
       } catch (error) {
         this._logger.error('Could not process meeting end event', error);
+      }
+    });
+
+    // Bridge participant updates from browser to Node.js
+    await this.page.exposeFunction('screenAppParticipantUpdate', (data: string) => {
+      try {
+        const event = JSON.parse(data);
+        this.participantEvents.push(event);
+        this._logger.info('Participant roster update', event);
+      } catch (err) {
+        this._logger.error('Failed to parse participant update:', err);
       }
     });
   }
