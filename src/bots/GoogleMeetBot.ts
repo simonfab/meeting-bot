@@ -855,6 +855,11 @@ export class GoogleMeetBot extends MeetBotBase {
           const maxDetectionFailures = 10; // Track up to 10 consecutive failures
           let lastBadgeLogTime = 0; // Track last time we logged badge count
 
+          // Participant detection — state-aware
+          // Phase 1: Wait for someone to join (count >= 2)
+          // Phase 2: Once participants seen, end as soon as bot is alone (count < 2)
+          let hasSeenParticipants = false;
+
           function detectLoneParticipantResilient(): void {
             const re = /^[0-9]+$/;
 
@@ -1010,12 +1015,18 @@ export class GoogleMeetBot extends MeetBotBase {
                     return;
                   }
                   detectionFailures = 0;
-                  if (contributors < 2) {
-                    console.log('Bot is alone, ending meeting.');
+                  if (contributors >= 2) {
+                    if (!hasSeenParticipants) {
+                      console.log(`Participants joined (count: ${contributors}) — meeting is active`);
+                      hasSeenParticipants = true;
+                    }
+                  } else if (hasSeenParticipants) {
+                    console.log(`Bot is alone after participants left (count: ${contributors})`);
                     loneTestDetectionActive = false;
                     stopTheRecording();
                     return;
                   }
+                  // If !hasSeenParticipants && contributors < 2, keep waiting — bot arrived early
                 } catch (err) {
                   detectionFailures++;
                   console.error('Detection error:', err, detectionFailures);
@@ -1114,9 +1125,10 @@ export class GoogleMeetBot extends MeetBotBase {
           /**
            * Perpetual checks for inactivity detection
            */
-          inactivityParticipantDetectionTimeout = setTimeout(() => {
-            detectLoneParticipantResilient();
-          }, activateInactivityDetectionAfterMinutes * 60 * 1000);
+          // Participant detection starts immediately (state-aware — waits for
+          // participants before triggering end). Silence detection starts after
+          // grace period as a safety net.
+          detectLoneParticipantResilient();
 
           inactivitySilenceDetectionTimeout = setTimeout(() => {
             detectIncrediblySilentMeeting();

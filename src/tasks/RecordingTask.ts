@@ -176,7 +176,12 @@ export class RecordingTask extends Task<null, void> {
           let loneTest: NodeJS.Timeout;
           let monitor = true;
 
-          // TODO Create standard detection lib
+          // Participant detection — starts immediately, state-aware
+          // Phase 1: Wait for someone to join (count >= 2)
+          // Phase 2: Once participants seen, end as soon as bot is alone (count < 2)
+          let hasSeenParticipants = false;
+          console.log('Participant count detection active (waiting for participants to join)...');
+
           const detectLoneParticipant = () => {
             let dom: Document = document;
             const iframe: HTMLIFrameElement | null = document.querySelector('iframe#webclient');
@@ -231,14 +236,22 @@ export class RecordingTask extends Task<null, void> {
                   console.error('Zoom participants detection is probably not working on user:', { userId, teamId });
                   return;
                 }
-                if (Number(participants[0]) > 1) {
+                const count = Number(participants[0]);
+                if (count > 1) {
+                  if (!hasSeenParticipants) {
+                    console.log(`Participants joined (count: ${count}) — meeting is active`);
+                    hasSeenParticipants = true;
+                  }
                   return;
                 }
 
-                console.log('Detected meeting bot is alone in meeting, ending recording on team:', { userId, teamId });
-                clearInterval(loneTest);
-                monitor = false;
-                stopTheRecording();
+                if (hasSeenParticipants) {
+                  console.log(`Bot is alone after participants left (count: ${count})`, { userId, teamId });
+                  clearInterval(loneTest);
+                  monitor = false;
+                  stopTheRecording();
+                }
+                // If !hasSeenParticipants, keep waiting — bot arrived early
               } catch (error) {
                 console.error('Zoom Meeting presence detection failed on team:', { userId, teamId, message: error.message, error });
               }
@@ -294,10 +307,12 @@ export class RecordingTask extends Task<null, void> {
           };
 
           /**
-           * Perpetual checks for inactivity detection
+           * Participant detection starts immediately (state-aware — waits for
+           * participants before triggering end). Silence detection starts after
+           * grace period as a safety net.
            */
+          detectLoneParticipant();
           inactivityDetectionTimeout = setTimeout(() => {
-            detectLoneParticipant();
             detectIncrediblySilentMeeting();
           }, activateInactivityDetectionAfterMinutes * 60 * 1000);
 
