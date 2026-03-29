@@ -800,32 +800,38 @@ export class MicrosoftTeamsBot extends MeetBotBase {
             }
           }, 2000);
 
-          // Activate participant detection after delay
-          setTimeout(() => {
-            console.log('Activating participant count detection...');
+          // Participant detection — starts immediately, state-aware
+          // Phase 1: Wait for someone to join (count >= 2)
+          // Phase 2: Once participants seen, end as soon as bot is alone (count < 2)
+          console.log('Participant count detection active (waiting for participants to join)...');
+          let hasSeenParticipants = false;
 
-            const detectLoneParticipant = () => {
-              const interval = setInterval(() => {
-                try {
-                  const regex = /\d+/;
-                  const contributors = Array.from(document.querySelectorAll('button[aria-label=People]') ?? [])
-                    .filter(x => regex.test(x?.textContent ?? ''))[0]?.textContent;
-                  const match = (typeof contributors === 'undefined' || !contributors) ? null : contributors.match(regex);
+          const participantInterval = setInterval(() => {
+            try {
+              const regex = /\d+/;
+              const contributors = Array.from(document.querySelectorAll('button[aria-label=People]') ?? [])
+                .filter(x => regex.test(x?.textContent ?? ''))[0]?.textContent;
+              const match = (typeof contributors === 'undefined' || !contributors) ? null : contributors.match(regex);
+              const count = match ? Number(match[0]) : null;
 
-                  if (match && Number(match[0]) >= 2) {
-                    return; // Still has participants
-                  }
-
-                  clearInterval(interval);
-                  endMeetingOnce('Bot is alone (participant count)');
-                } catch (error) {
-                  console.error('Participant detection error:', error);
+              if (count !== null && count >= 2) {
+                if (!hasSeenParticipants) {
+                  console.log(`Participants joined (count: ${count}) — meeting is active`);
+                  hasSeenParticipants = true;
                 }
-              }, 2000);
-            };
+                return; // Still has participants, keep going
+              }
 
-            detectLoneParticipant();
-          }, activateAfterMinutes * 60 * 1000);
+              if (hasSeenParticipants) {
+                // Everyone left — end immediately
+                clearInterval(participantInterval);
+                endMeetingOnce(`Bot is alone after participants left (count: ${count})`);
+              }
+              // If !hasSeenParticipants, keep waiting — bot arrived early
+            } catch (error) {
+              console.error('Participant detection error:', error);
+            }
+          }, 2000);
         },
         {
           activateAfterMinutes: effectiveInactivityDetectionDelayMinutes,
