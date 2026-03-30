@@ -197,7 +197,23 @@ export class RecordingTask extends Task<null, void> {
             /^\d+$/, // pure numbers
             /^invited \(\d+\)/i, /^others/i, /^participants/i,
             /^waiting room/i, /^raise hand/i,
+            /^copy invite/i, /^invite/i, /^share invite/i,
+            /^claim host/i, /^leave$/i, /^end$/i, /^react$/i,
+            /^rename$/i, /^stop video$/i, /^start video$/i,
+            /^security$/i, /^record$/i, /^apps$/i,
+            /^\(host\)$/i, /^\(me\)$/i, /^\(co-host\)$/i, /^\(guest\)$/i,
           ];
+
+          // Clean name: strip role suffixes like "(Host)", "(Me)", newlines
+          const cleanName = (raw: string): string => {
+            return raw
+              .replace(/\n/g, ' ')           // newlines to spaces
+              .replace(/\s*\(host\)/gi, '')   // strip (Host)
+              .replace(/\s*\(me\)/gi, '')     // strip (Me)
+              .replace(/\s*\(co-host\)/gi, '') // strip (Co-host)
+              .replace(/\s*\(guest\)/gi, '')  // strip (Guest)
+              .trim();
+          };
 
           const BOT_NAME_PATTERNS = [
             /notetaker/i, /note\s*taker/i, /recording\s*bot/i,
@@ -210,34 +226,55 @@ export class RecordingTask extends Task<null, void> {
           // Click the Participants button to open the participant panel in Zoom
           const openParticipantsPanel = (dom: Document) => {
             try {
-              // Zoom uses a "Participants" button in the footer toolbar
-              let participantsBtn: Element | null = null;
+              if (participantsPanelOpened) return;
 
-              // Method 1: aria-label based
-              participantsBtn = dom.querySelector('button[aria-label*="Participants"]')
-                || dom.querySelector('button[aria-label*="participants"]');
+              // Zoom footer has a "Participants" button with two parts:
+              // - The main button (shows count + "Participants" text) opens the panel
+              // - A dropdown arrow opens invite options
+              // We need to click the main button text, not the dropdown
 
-              // Method 2: button with "Participants" text
-              if (!participantsBtn) {
-                const allBtns = Array.from(dom.querySelectorAll('button'));
-                participantsBtn = allBtns.find(b =>
-                  /participants/i.test((b as HTMLElement).innerText?.trim() ?? '')
-                ) || null;
+              // Method 1: Click the specific participants count/label button
+              let clicked = false;
+              const footerBtns = Array.from(dom.querySelectorAll('.footer-participants-button button, [class*="footer-button"] button'));
+              for (const btn of footerBtns) {
+                const text = (btn as HTMLElement).innerText?.trim() ?? '';
+                const ariaLabel = btn.getAttribute('aria-label') ?? '';
+                // Look for the main button that shows participant count + "Participants"
+                if (/\d+\s*participants/i.test(text) || /participants/i.test(ariaLabel)) {
+                  (btn as HTMLElement).click();
+                  clicked = true;
+                  break;
+                }
               }
 
-              // Method 3: footer button that shows participant count
-              if (!participantsBtn) {
-                const footerBtns = Array.from(dom.querySelectorAll('#wc-footer button, [class*="footer"] button'));
-                participantsBtn = footerBtns.find(b => {
-                  const text = (b as HTMLElement).innerText?.trim() ?? '';
-                  return /^\d+/.test(text);
-                }) || null;
+              // Method 2: Click any element with "Participants" text inside footer
+              if (!clicked) {
+                const allFooterEls = Array.from(dom.querySelectorAll('#wc-footer span, #wc-footer [class*="label"]'));
+                for (const el of allFooterEls) {
+                  const text = (el as HTMLElement).innerText?.trim() ?? '';
+                  if (/^participants$/i.test(text)) {
+                    (el as HTMLElement).click();
+                    clicked = true;
+                    break;
+                  }
+                }
               }
 
-              if (participantsBtn && !participantsPanelOpened) {
-                (participantsBtn as HTMLElement).click();
+              // Method 3: aria-label based button
+              if (!clicked) {
+                const ariaBtn = dom.querySelector('button[aria-label*="open the participants"]')
+                  || dom.querySelector('button[aria-label*="Participants list"]');
+                if (ariaBtn) {
+                  (ariaBtn as HTMLElement).click();
+                  clicked = true;
+                }
+              }
+
+              if (clicked) {
                 participantsPanelOpened = true;
                 console.log('[PARTICIPANT_NAMES] Participants panel clicked open');
+              } else {
+                console.log('[PARTICIPANT_NAMES] Could not find Participants panel button');
               }
             } catch (err) {
               console.error('[PARTICIPANT_NAMES] Failed to open Participants panel:', err);
@@ -268,7 +305,8 @@ export class RecordingTask extends Task<null, void> {
               for (const selector of selectors) {
                 const elements = dom.querySelectorAll(selector);
                 elements.forEach(el => {
-                  const text = (el as HTMLElement)?.innerText?.trim();
+                  const raw = (el as HTMLElement)?.innerText?.trim();
+                  const text = raw ? cleanName(raw) : '';
                   if (text && text.length > 1 && text.length < 80 && !isNoise(text)) {
                     names.push(text);
                   }
@@ -282,16 +320,29 @@ export class RecordingTask extends Task<null, void> {
                 panels.forEach(panel => {
                   const listItems = panel.querySelectorAll('[role="listitem"], li, [class*="item"]');
                   listItems.forEach(item => {
-                    const text = (item as HTMLElement)?.innerText?.trim();
-                    if (text && text.length > 1 && text.length < 80 && !isNoise(text)) {
+                    const raw = (item as HTMLElement)?.innerText?.trim();
+                    if (raw && raw.length > 1 && raw.length < 80) {
                       // Take only the first line (name), not status/controls text
-                      const firstName = text.split('\n')[0].trim();
+                      const firstName = cleanName(raw.split('\n')[0].trim());
                       if (firstName && firstName.length > 1 && !isNoise(firstName)) {
                         names.push(firstName);
                       }
                     }
                   });
                 });
+              }
+
+              // Debug: if no names found, dump what we can see
+              if (names.length === 0) {
+                // Look more broadly - any side panel or overlay that appeared
+                const allPanels = dom.querySelectorAll('[class*="panel"], [class*="sidebar"], [class*="drawer"], [role="complementary"], [class*="participants"]');
+                const debugInfo = Array.from(allPanels).slice(0, 5).map(p => ({
+                  tag: p.tagName,
+                  class: p.className?.toString().slice(0, 80),
+                  childCount: p.children.length,
+                  textPreview: (p as HTMLElement).innerText?.slice(0, 300),
+                }));
+                console.log('[PARTICIPANT_NAMES] Debug: panels/sidebars found:', JSON.stringify(debugInfo));
               }
             } catch (err) {
               console.error('[PARTICIPANT_NAMES] Scrape error:', err);
