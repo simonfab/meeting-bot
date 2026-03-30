@@ -898,53 +898,48 @@ export class GoogleMeetBot extends MeetBotBase {
           const isNoise = (text: string): boolean =>
             NOISE_PATTERNS.some(p => p.test(text)) || BOT_NAME_PATTERNS.some(p => p.test(text));
 
-          // Click the People button to open the participant panel
+          // For Google Meet, don't click any panel — it breaks the toolbar.
+          // Instead, scrape names directly from video tiles and "More options for X" buttons.
           const openPeoplePanel = () => {
-            try {
-              // Reuse the same selectors from findPeopleButton
-              let peopleBtn: Element | null = document.querySelector('button[aria-label^="People -"]');
-              if (!peopleBtn) peopleBtn = document.querySelector('button[aria-label*="People"]');
-              if (!peopleBtn) peopleBtn = document.querySelector('button[aria-label="Show everyone"]');
-              if (!peopleBtn) {
-                // Try via aria-labelledby pointing to element with "People" text
-                const allBtns = Array.from(document.querySelectorAll('button[aria-labelledby]'));
-                peopleBtn = allBtns.find(b => {
-                  const labelledBy = b.getAttribute('aria-labelledby');
-                  if (labelledBy) {
-                    const labelElement = document.getElementById(labelledBy);
-                    if (labelElement && labelElement.textContent?.trim() === 'People') {
-                      return true;
-                    }
-                  }
-                  return false;
-                }) || null;
-              }
-              if (peopleBtn && !peoplePanelOpened) {
-                (peopleBtn as HTMLElement).click();
-                peoplePanelOpened = true;
-                console.log('[PARTICIPANT_NAMES] People panel clicked open');
-              }
-            } catch (err) {
-              console.error('[PARTICIPANT_NAMES] Failed to open People panel:', err);
-            }
+            // No-op: we scrape from existing DOM elements without opening panels
+            peoplePanelOpened = true;
           };
 
-          // Scrape participant names from the open People panel
+          // Scrape participant names directly from the Google Meet DOM
           const scrapeParticipantNames = (): string[] => {
             const names: string[] = [];
             try {
-              // Google Meet People panel uses various list structures
+              // Method 1: Extract from "More options for X" / "Show in a tile X" buttons
+              // These are the most reliable — each participant has one
+              const allBtns = Array.from(document.querySelectorAll('button[aria-label]'));
+              allBtns.forEach(btn => {
+                const label = btn.getAttribute('aria-label') ?? '';
+                const match = label.match(/^(?:More options for|Show in a tile)\s+(.+)$/i);
+                if (match) {
+                  const name = match[1].trim();
+                  if (name && name.length > 1 && name.length < 80 && !isNoise(name)) {
+                    names.push(name);
+                  }
+                }
+              });
+              if (names.length > 0) return [...new Set(names)];
+
+              // Method 2: data-self-name attribute
+              const selfNameEls = document.querySelectorAll('[data-self-name]');
+              selfNameEls.forEach(el => {
+                const name = el.getAttribute('data-self-name')?.trim();
+                if (name && name.length > 1 && !isNoise(name)) {
+                  names.push(name);
+                }
+              });
+              if (names.length > 0) return [...new Set(names)];
+
+              // Method 3: Panel-based selectors (if a panel happens to be open)
               const selectors = [
-                // People panel list items — primary
                 '[aria-label="Participants"] [data-participant-id] span',
                 '[aria-label="People"] [data-participant-id] span',
-                // Fallback: role-based list inside the panel
                 '[role="list"] [role="listitem"] span',
-                // Alternative: div-based participant entries
                 '[data-participant-id] [class*="name"]',
-                '[data-self-name]',
-                // Broader fallback
-                '[class*="participant"] [class*="name"]',
               ];
 
               for (const selector of selectors) {
@@ -980,6 +975,7 @@ export class GoogleMeetBot extends MeetBotBase {
                   }
                 });
               }
+              // (Methods 1 and 2 already tried above)
             } catch (err) {
               console.error('[PARTICIPANT_NAMES] Scrape error:', err);
             }
@@ -1045,7 +1041,26 @@ export class GoogleMeetBot extends MeetBotBase {
                   );
                   if (btn) return btn;
 
-                  // 6. Not found
+                  // 6. Try "Meeting details" button (newer Google Meet UI)
+                  btn = allBtnsWithLabel.find(b => {
+                    const label = b.getAttribute('aria-label');
+                    return label && /meeting details/i.test(label);
+                  });
+                  if (btn) return btn;
+
+                  // 7. Try "Show everyone" button
+                  btn = allBtnsWithLabel.find(b => {
+                    const label = b.getAttribute('aria-label');
+                    return label && /show everyone/i.test(label);
+                  });
+                  if (btn) return btn;
+
+                  // 8. Not found — dump available buttons for debugging
+                  if (detectionFailures <= 1) {
+                    const allBtnsDebug = Array.from(document.querySelectorAll('button[aria-label]')).slice(0, 20);
+                    const labels = allBtnsDebug.map(b => b.getAttribute('aria-label')).filter(Boolean);
+                    console.log('[Detection] People button NOT found. Available buttons:', JSON.stringify(labels));
+                  }
                   return null;
                 } catch (error) {
                   console.log('Error finding people button:', error);
@@ -1118,6 +1133,22 @@ export class GoogleMeetBot extends MeetBotBase {
                 }
               } catch (error) {
                 console.log('Error finding participant badge:', error);
+              }
+
+              // Fallback: count video tiles / participant containers on screen
+              try {
+                // Google Meet shows each participant in a [data-participant-id] element
+                const participantEls = document.querySelectorAll('[data-participant-id]');
+                if (participantEls.length > 0) {
+                  return participantEls.length;
+                }
+                // Alternative: count video tiles by their container pattern
+                const tiles = document.querySelectorAll('[data-self-name], [data-requested-participant-id]');
+                if (tiles.length > 0) {
+                  return tiles.length;
+                }
+              } catch (error) {
+                // ignore
               }
 
               return undefined;
